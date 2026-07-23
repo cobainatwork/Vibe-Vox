@@ -18,18 +18,21 @@
 
 - `detect_audio_format(header: bytes) -> str | None`
 - 以 magic numbers 比對允許容器：wav（`RIFF....WAVE`）、mp3（`ID3` 或 frame sync `0xFFEx`）、flac（`fLaC`）、ogg（`OggS`）、m4a（`....ftyp`）、webm（EBML `0x1A45DFA3`）。
-- 不符回 `None`；呼叫端決定拋錯。不採 `python-magic`（Windows 需系統 libmagic，onboarding 摩擦高）；手寫 sniffer 零依賴且對安全敏感路徑可審計。
+- 不符回 `None`；呼叫端決定拋錯。不採 `python-magic`（Windows 需系統 libmagic）／`python-magic-bin`（Windows-only 綁 DLL、Linux CI/prod 仍需系統 libmagic、實質停維護，且 libmagic 判滿天下型別而本模組僅允許 6 種白名單）；手寫小型白名單 sniffer 零依賴、跨平台一致且對安全敏感路徑可審計。
 - 不信副檔名：判定僅依標頭位元組。
+- 角色界定：sniffer 只做「容器層」保守判定（例如 `ftyp` box 於 offset 4 即認出整個 MP4/M4A 家族，不逐一列舉 major_brand），作為擋掉明顯非音訊檔的廉價前置閘；真正的解碼驗證交給 ffmpeg，無法解碼者於轉碼階段 raise `TranscodeError`（→400）。此分工使 sniffer 不必求全，維護成本低。
+- MIME：magic numbers 為權威判定。client 於 multipart 宣告的 `Content-Type` 不可信、可偽造，僅於 #5／#7 端點層作交叉參考訊號，絕不單獨採信；本模組層一律以 magic 為準。
 
 ### 2.2 `intake.py` — 串流落地 + 驗證 + 共用 facade
 
 - `async def save_upload(chunks: AsyncIterator[bytes], *, temp_dir: Path, max_bytes: int) -> Path`
-  - 產生伺服器 UUID 檔名，逐塊寫入 `temp_dir`，不整檔載入記憶體。
-  - 首塊先做 `detect_audio_format`；回 `None` 即 raise `UnsupportedAudioFormat`（在寫入其餘內容前，fail fast）。
+  - 產生伺服器 UUID 檔名，以 `open(path, "xb")`（O_EXCL 語意）原子建立、逐塊寫入 `temp_dir`，不整檔載入記憶體。O_EXCL 保證不覆寫既有或 symlink 目標（temp_dir 為專案自控的 `var/tmp`、非共用 `/tmp`，且 UUID 不可預測，風險本就低，此為縱深防禦）。
+  - sniff 不依賴單一 chunk：ASGI chunk 邊界由伺服器決定，首塊可能短於 magic 所需長度。先跨初始 chunks 累積一個小型 header window（64 bytes，足以涵蓋所有允許格式的 magic — 皆落在前 12 bytes 內），再做 `detect_audio_format`；回 `None` 即 raise `UnsupportedAudioFormat`（寫入前即拒，fail fast）。sniff 通過後，header window 與後續 chunks 一併寫入。不採 2MB 大 buffer：本模組允許格式的 magic 都在檔首，大 buffer 反而違背「不整檔載入記憶體」目標。
   - 累計位元組超過 `max_bytes` 即 raise `FileTooLarge`；已寫入的部分檔清除。
 - facade：`async def transcoded(chunks, *, sample_rate, channels=1) -> AsyncContextManager[Path]`
   - 內部串流落地 → 轉碼 → yield 輸出 wav 路徑；離開 context 時原始暫存檔與輸出 wav 皆刪除（對應「暫存檔用畢即清」）。
   - 逾時或 HTTP 連線中斷（cancel 傳播為 `CancelledError`）時，仍於 `finally` 清檔並殺子進程。
+  - 慢速上傳（Slowloris）防護：intake+transcode 全程須在請求逾時範圍內執行 — #5／#7 端點以既有 `HeavyRequestGuard.slot()`（`asyncio.timeout` 包住整個 slot）涵蓋上傳消費迴圈，慢速或掛起的上傳會被強制取消並觸發 `finally` 清資源；併發上限（`max_concurrent_heavy_requests`）界定同時慢上傳數，避免耗盡 worker。此為 spec 安全與資源邊界（`spec.md:167`）「每個重量級端點逾時 + 逾時後清理」的落實，非新機制。
   - 此即 #5／#7 的唯一共用進入點。
 
 ### 2.3 `transcode.py` — FFmpeg 子進程包裝
@@ -55,15 +58,15 @@
 
 ## 4. 資料流
 
-上傳串流（chunks）→ `save_upload`：首塊 sniff（不符→400）、逐塊寫 UUID 暫存檔（超限→413）→ `transcode_to_wav`：ffmpeg 轉為 wav（pcm_s16le/目標率/mono，失敗→400、逾時→504 語意）→ facade yield wav 路徑供呼叫端使用 → context 離開清除兩個暫存檔。
+上傳串流（chunks）→ `save_upload`：累積 header window 後 sniff（不符→400）、逐塊寫 UUID 暫存檔（超限→413）→ `transcode_to_wav`：ffmpeg 轉為 wav（pcm_s16le/目標率/mono，失敗→400、逾時→504 語意）→ facade yield wav 路徑供呼叫端使用 → context 離開清除兩個暫存檔。
 
 ## 5. 測試策略（模組直測）
 
 依 spec 第 176 行（轉檔器以小型樣本檔直測）授權，本票不建投機 HTTP 端點；#5 接真實 `/api/asr/transcribe` 時於 HTTP seam 驗證 413/400 映射。
 
 不需 ffmpeg（處處可跑）：
-- sniff：各允許格式標頭回正確型別；偽造/非音訊標頭回 `None`。
-- `save_upload`：偽造 magic number → `UnsupportedAudioFormat`；超限的分塊 async iterator → `FileTooLarge`，且於超過上限即停止、不繼續耗盡輸入串流（斷言 iterator 未被完全消費，佐證逐塊串流而非整檔載入）；落地檔名為 UUID、不含使用者輸入。
+- sniff：各允許格式標頭回正確型別；偽造/非音訊標頭回 `None`；帶大型 ID3v2 標頭的 mp3（`ID3` 於 offset 0）仍正確判為 mp3，證實大標籤不影響檔首 magic 判定。fixtures 蒐集多來源樣本（Apple／Android／ffmpeg 轉出的 m4a、含/不含 ID3 的 mp3）以覆蓋容器多樣性。
+- `save_upload`：偽造 magic number → `UnsupportedAudioFormat`；**header 邊界**：以刻意切成極小片段（如每塊 4 bytes）的 async iterator 餵入合法檔，斷言跨 chunk 累積 header window 後仍正確判定、不因首塊過短而誤拒；超限的分塊 async iterator → `FileTooLarge`，且於超過上限即停止、不繼續耗盡輸入串流（斷言 iterator 未被完全消費，佐證逐塊串流而非整檔載入）；落地檔名為 UUID、不含使用者輸入；暫存檔以 O_EXCL 建立（斷言目標已存在時拒絕覆寫）。
 
 需 ffmpeg（`@pytest.mark.skipif(shutil.which("ffmpeg") is None)`）：
 - 轉碼取樣率正確：以 ffmpeg 生成樣本（`-f lavfi -i sine`）→ 轉為目標率 → 解析輸出 WAV 標頭斷言取樣率（零依賴，不需 ffprobe）。
@@ -79,3 +82,13 @@
 ## 7. 對後續票的介面承諾
 
 #5／#7 只需：`async with audio_intake.transcoded(request.stream(), sample_rate=<rate>) as wav_path: ...`，取得已正規化的 wav 路徑，用畢自動清檔。驗證與資源清理封裝於模組內，呼叫端不重複處理。
+
+## 8. 審查修訂紀錄（2026-07-23，Gemini 對抗性審查）
+
+裁決以技術正確性為準，非照單全收。
+
+1. 首塊 sniff 脆弱性（警告）— 採納結論、駁回理由與修法。ID3v2 之 mp3 開頭即 `ID3` magic，大型封面圖不會把 magic 往後推，故「frame sync 被埋深導致誤拒」不成立；真正脆弱點是 ASGI 首塊可能短於 magic 長度。改為累積 64 bytes header window 後 sniff，非 2MB buffer（後者違背不整檔載入記憶體）。見 §2.2。
+2. Slowloris 慢速上傳（警告）— 採納為文件缺口。補明 intake 全程在既有 `HeavyRequestGuard` 逾時範圍內執行，慢速/掛起上傳被強制取消清資源。見 §2.2 facade。
+3. 暫存檔 O_EXCL（附註）— 採納，改法微調為 `open(path,"xb")` 保留伺服器 UUID 檔名，不用 `NamedTemporaryFile`（其自選檔名）。見 §2.2。
+4. m4a brands／`python-magic-bin`（附註）— 部分採納。採納多來源 fixtures；澄清 sniffer 僅做容器層判定、ffmpeg 為權威解碼驗證器，故不需列舉 brand。駁回 `python-magic-bin`（Windows-only DLL、跨平台不一致、停維護，白名單僅 6 種）。見 §2.1、§5。
+5. 補 MIME 判定（審查未提，對齊 spec）— magic 為權威，client `Content-Type` 僅端點層交叉參考、不單獨採信。見 §2.1。
