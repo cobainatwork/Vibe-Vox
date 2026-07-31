@@ -1,0 +1,2 @@
+# 此 spike 於 Linux 容器內執行；強制 LF，避免 CRLF 破壞 shebang/腳本。
+* text=auto eol=lf
