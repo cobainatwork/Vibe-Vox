@@ -18,18 +18,22 @@ import argparse
 import time
 from pathlib import Path
 
-# 台灣口語測試句：刻意含「破音字 + 語氣詞 + 中性句」，每句配不同逐句情緒風格標籤，
+# 台灣口語測試句：含「破音字 + 語氣詞 + 中性句」，每句配不同逐句情緒風格標籤，
 # 一次驗證 #11（夠不夠台）與 #12（情緒逐句可變 + 音色像不像本人）。
-# 破音字聽點：垃圾=lè sè（非 lā jī）、和=hàn（連接詞）、企業=qì yè、星期=xīng qí。
+# 台灣/大陸讀音有差的字，以 VoxCPM 音素輸入 {pinyin+聲調} 強制台灣讀音（官方：normalize=False
+# 時支援，如 {ni3}{hao3}；本 spike 用預設 normalize=False）。此前無此鎖定時，這些字被念成
+# 大陸/錯誤讀音（垃圾、和、企業、星期），ctrl_03 因無此類字而最自然。
+# 鎖定：垃圾={le4}{se4}、和(連接詞)={han4}、企業={qi4}{ye4}、星期={xing1}{qi2}。
+# 註：正式產品輸入為任意文字，需自動「TW 破音字→拼音」前處理層才能規模化（見 README）。
 TAIWAN_SENTENCES = [
-    ("(neutral tone)", "麻煩你把這包垃圾拿去倒一下，謝謝。"),
-    ("(cheerful, upbeat tone)", "欸這間店的鹹酥雞真的超好吃啦，你星期六一定要來試試看喔！"),
-    ("(angry, irritated tone)", "我跟你和他講過多少次了，這種事情不要再犯了齁！"),
+    ("(neutral tone)", "麻煩你把這包{le4}{se4}拿去倒一下，謝謝。"),
+    ("(cheerful, upbeat tone)", "欸這間店的鹹酥雞真的超好吃啦，你{xing1}{qi2}六一定要來試試看喔！"),
+    ("(angry, irritated tone)", "我跟你{han4}他講過多少次了，這種事情不要再犯了齁！"),
     ("(gentle, warm, slower tone)", "沒關係啦，慢慢來就好，我在這邊等你，別緊張。"),
-    ("(excited tone)", "欸欸你看那個！這家企業也太扯了吧，我整個嚇到！"),
+    ("(excited tone)", "欸欸你看那個！這家{qi4}{ye4}也太扯了吧，我整個嚇到！"),
 ]
 
-NEUTRAL_FOR_HIFI = "麻煩你把這包垃圾拿去倒一下，謝謝。"
+NEUTRAL_FOR_HIFI = "麻煩你把這包{le4}{se4}拿去倒一下，謝謝。"
 
 
 def main():
@@ -76,7 +80,7 @@ def main():
         run(
             style, "controllable",
             dict(text=f"{style}{text}", reference_wav_path=args.ref,
-                 cfg_value=2.0, inference_timesteps=10),
+                 cfg_value=2.0, inference_timesteps=10, normalize=False),
             f"ctrl_{i:02d}.wav",
         )
 
@@ -85,7 +89,7 @@ def main():
         run(
             "(hi-fi baseline, no style)", "hifi",
             dict(text=NEUTRAL_FOR_HIFI, prompt_wav_path=args.ref, prompt_text=ref_text,
-                 cfg_value=2.0, inference_timesteps=10),
+                 cfg_value=2.0, inference_timesteps=10, normalize=False),
             "hifi_00.wav",
         )
     else:

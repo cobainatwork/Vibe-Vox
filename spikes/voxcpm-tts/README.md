@@ -68,6 +68,12 @@ Fallback（不用 Docker）：`pip install voxcpm soundfile librosa` 後 `python
 ### 順帶（延遲 fog）
 記下表中 Controllable 的 RTF 與單句生成時間，供 map 的 Not-yet-specified 延遲評估。注意：本 spike 用 eager 模式（`optimize=False`，避開 torch.compile 的 C 編譯器需求），RTF 較正式 compiled 偏慢，屬**悲觀值**；正式效能量測需另備含 build 工具的 image 再開 optimize。
 
+## 5b. 台灣發音（為何鎖拼音）
+
+VoxCPM 大陸訓練，預設對台陸讀音有差的字用大陸讀音；zero-shot 克隆只搬音色、不搬逐字發音，故「垃圾/和/企業/星期」等字會露餡（未鎖定時 `ctrl_03` 因無此類字最自然）。本 spike 對這些字用 VoxCPM 音素輸入 `{pinyin+聲調}`（`normalize=False` 時支援，官方文件）強制台灣讀音。
+
+**正式產品意涵**：輸入為任意文字，不能手工標拼音。需在 TTS adapter 加一層「台灣破音字→拼音」前處理（curated TW 多音字表 + G2P），把台陸有差異的字自動轉 `{pinyin}` 再送 VoxCPM。屬引擎定案後的設計工作。
+
 ## 6. 回報
 
 把兩道判定貼回 issue #11 / #12（或告訴我），我來 work 那兩張票：記錄決議、關閉、更新 map #9 的 Decisions-so-far。兩道皆 pass → 專案 go、引擎定案 VoxCPM。
