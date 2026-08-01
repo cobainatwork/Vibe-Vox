@@ -54,7 +54,10 @@ def main():
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    model = VoxCPM.from_pretrained(args.model, load_denoiser=False)
+    # optimize=False：跳過 torch.compile（官方文件：optimize 需 CUDA + Triton，Triton 執行期
+    # 要 C 編譯器編 kernel，而 runtime image 無 gcc）。走 eager 模式，本 spike 重品質不重速度；
+    # 代價：RTF 較 compiled 偏慢，正式效能量測需另備含 build 工具的 image 再開 optimize。
+    model = VoxCPM.from_pretrained(args.model, load_denoiser=False, optimize=False)
 
     rows = []
 

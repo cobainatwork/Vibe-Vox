@@ -66,7 +66,7 @@ Fallback（不用 Docker）：`pip install voxcpm soundfile librosa` 後 `python
 - 判定：音色夠像 + 情緒有效 + 取捨可接受 → **pass（(A) 過）**；否則 **fail**。
 
 ### 順帶（延遲 fog）
-記下表中 Controllable 的 RTF 與單句生成時間，供 map 的 Not-yet-specified 延遲評估。
+記下表中 Controllable 的 RTF 與單句生成時間，供 map 的 Not-yet-specified 延遲評估。注意：本 spike 用 eager 模式（`optimize=False`，避開 torch.compile 的 C 編譯器需求），RTF 較正式 compiled 偏慢，屬**悲觀值**；正式效能量測需另備含 build 工具的 image 再開 optimize。
 
 ## 6. 回報
 
