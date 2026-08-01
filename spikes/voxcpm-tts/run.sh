@@ -34,7 +34,7 @@ docker build -t voxcpm-spike:latest .
 
 echo "==> GPU 煙霧測試（必須印 cuda.is_available = True，否則結果不可信）"
 docker run --rm --gpus all --entrypoint python voxcpm-spike:latest \
-  -c "import torch; print('cuda.is_available =', torch.cuda.is_available())"
+  -c "import torch; print('torch', torch.__version__, '+cuda', torch.version.cuda, '| cuda.is_available =', torch.cuda.is_available())"
 
 echo "==> run spike"
 ARGS=(--ref "/work/$(basename "$REF")")

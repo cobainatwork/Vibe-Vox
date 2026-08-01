@@ -46,9 +46,9 @@ Fallback（不用 Docker）：`pip install voxcpm soundfile librosa` 後 `python
 
 ## 4b. 版本排錯（build 或 GPU 測試失敗時）
 
-- GPU 煙霧測試印 `False`：`pip install voxcpm` 可能把 torch 換成 CPU 版（與 base image 的 CUDA torch 衝突）。對策：把 Dockerfile 的 `FROM pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime` 換成符合 voxcpm 要求的 torch/CUDA tag，或改 `pip install voxcpm --no-deps` 再補裝其非 torch 依賴。
-- torchaudio 缺失/版本不合：於 Dockerfile 的 pip 行補上相容的 `torchaudio`。
-- 我無法在此環境 build/測此 image；以上為版本敏感點的預先標註，實際以機上 build 訊息為準。
+- **已知並已修**：症狀 `cuda.is_available = False` + 「driver too old (found 12080)」，代表容器的 torch 是為比目標機 driver（CUDA 12.8）更新的 CUDA 編譯的。根因：voxcpm 要求 `torch>=2.5.0`，會把過舊的 base torch 升級成最新（預設 CUDA build > 12.8）的 wheel。**已改用 base image `pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime`**（torch 2.6+cu124，滿足 voxcpm 且 cu124 相容 driver>=12.4）。
+- 換到 driver CUDA < 12.4 的機器：把 base tag 的 cuda 版本調低對齊 driver（tag 見 <https://hub.docker.com/r/pytorch/pytorch/tags>）。
+- 煙霧測試會印 `torch <版本> +cuda <build>`；若 `+cuda` 數字 > `nvidia-smi` 的 CUDA 版本，就是 torch 又被某依賴升級了 — 把 base tag 的 cuda 版本對齊 driver 即可。
 
 ## 5. 判定 rubric（你聽，agent 不代聽）
 
