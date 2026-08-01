@@ -14,30 +14,30 @@ git fetch origin && git checkout spike/voxcpm-tts
 cd spikes/voxcpm-tts
 ```
 
-## 2. 準備素材
+## 2. 準備素材（放進 `spikes/voxcpm-tts/` 資料夾即可）
 
-- `taiwan_ref.wav`：一段**乾淨的台灣人聲**，5–30 秒，wav/flac/mp3 皆可。口音要明顯台灣、口語自然（這決定 #11 的上限）。
-- 選填：該參考音的逐字稿字串（給 Hi-Fi 對照組用，判 #12 的音色相似度上限）。
+- **參考音**：一段乾淨的台灣人聲 `.wav`（5–30 秒；口音要明顯台灣、口語自然，這決定 #11 的上限）。檔名隨意，例如 `taiwan_ref.wav`。
+- **逐字稿（選填，是檔案不是打字）**：把參考音「講的內容」用記事本存成**同名 `.txt`**（`taiwan_ref.wav` → `taiwan_ref.txt`，UTF-8）。有它才跑 Hi-Fi 對照組（判 #12 音色相似度上限）；沒有就只跑 Controllable，不影響 #11。你不必在指令裡打任何文字。
 
 ## 3. 執行（Docker）
 
-把台灣參考音放進 `spikes/voxcpm-tts/` 下，然後：
+參考音（和選填的同名 `.txt`）放好後，直接：
 
 ```bash
-./run.sh taiwan_ref.wav "參考音的逐字稿"
+./run.sh
 ```
 
-`run.sh` 會：build image → 跑 GPU 煙霧測試（須印 `cuda.is_available = True`，否則結果不可信）→ 執行 spike。輸出在 `./out/`：`ctrl_00..04.wav`（Controllable 逐句情緒）、`hifi_00.wav`（Hi-Fi 對照）、`ctrl_00_24k_mono_16bit.wav`（adapter 取樣率健檢），外加 RTF/延遲表。HF 權重快取存於具名 volume `voxcpm-hf-cache`，約 8GB 只下一次。
+會自動抓資料夾裡的 `.wav`（有多個時再指定 `./run.sh 檔名.wav`）。`run.sh` 會：build image → 跑 GPU 煙霧測試（須印 `cuda.is_available = True`，否則結果不可信）→ 執行 spike。輸出在 `./out/`：`ctrl_00..04.wav`（Controllable 逐句情緒）、`hifi_00.wav`（Hi-Fi 對照，需有 `.txt` 才產出）、`ctrl_00_24k_mono_16bit.wav`（adapter 取樣率健檢），外加 RTF/延遲表。HF 權重快取存於具名 volume `voxcpm-hf-cache`，約 8GB 只下一次。
 
 不想用 `run.sh` 就手動：
 
 ```bash
 docker build -t voxcpm-spike:latest .
 docker run --rm --gpus all -v "$PWD":/work -v voxcpm-hf-cache:/hf-cache \
-  voxcpm-spike:latest --ref /work/taiwan_ref.wav --ref-text "逐字稿"
+  voxcpm-spike:latest --ref /work/taiwan_ref.wav --ref-text-file /work/taiwan_ref.txt
 ```
 
-Fallback（不用 Docker）：`pip install voxcpm soundfile librosa` 後 `python spike_voxcpm.py --ref taiwan_ref.wav --ref-text "逐字稿"`。
+Fallback（不用 Docker）：`pip install voxcpm soundfile librosa` 後 `python spike_voxcpm.py --ref taiwan_ref.wav --ref-text-file taiwan_ref.txt`。
 
 ## 4. 跑前先確認兩件事（評估文件標為「可信度中」，勿照單全收）
 

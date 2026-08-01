@@ -10,7 +10,8 @@ API 依官方 usage guide：https://voxcpm.readthedocs.io/en/latest/usage_guide.
   2. Hi-Fi 模式參數名（本檔用 prompt_wav_path + prompt_text，請對照 usage guide）。
 
 用法：
-  python spike_voxcpm.py --ref taiwan_ref.wav --ref-text "參考音的逐字稿（Hi-Fi 對照組用，選填）"
+  python spike_voxcpm.py --ref taiwan_ref.wav --ref-text-file taiwan_ref.txt
+  （--ref-text-file 選填，給 Hi-Fi 對照組用；也可用 --ref-text 直接傳字串）
 """
 
 import argparse
@@ -34,11 +35,18 @@ NEUTRAL_FOR_HIFI = "麻煩你把這包垃圾拿去倒一下，謝謝。"
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ref", required=True, help="台灣人聲參考音（5-30s，wav/flac/mp3）")
-    ap.add_argument("--ref-text", default=None, help="參考音逐字稿（Hi-Fi 對照組，選填）")
+    ap.add_argument("--ref-text", default=None, help="參考音逐字稿字串（Hi-Fi 對照組，選填）")
+    ap.add_argument("--ref-text-file", default=None,
+                    help="參考音逐字稿檔（.txt，UTF-8；優先於 --ref-text）")
     ap.add_argument("--out", default="out", help="輸出資料夾")
     ap.add_argument("--model", default="openbmb/VoxCPM2")
     ap.add_argument("--sr", type=int, default=48000, help="模型原生取樣率（VoxCPM2=48000）")
     args = ap.parse_args()
+
+    ref_text = args.ref_text
+    if args.ref_text_file:
+        # utf-8-sig：容忍 Windows 記事本存的 UTF-8 BOM，避免 ﻿ 混入逐字稿。
+        ref_text = Path(args.ref_text_file).read_text(encoding="utf-8-sig").strip()
 
     import numpy as np
     import soundfile as sf
@@ -70,15 +78,15 @@ def main():
         )
 
     # === Hi-Fi 對照組（#12 音色相似度上限）：同參考音、無風格 ===
-    if args.ref_text:
+    if ref_text:
         run(
             "(hi-fi baseline, no style)", "hifi",
-            dict(text=NEUTRAL_FOR_HIFI, prompt_wav_path=args.ref, prompt_text=args.ref_text,
+            dict(text=NEUTRAL_FOR_HIFI, prompt_wav_path=args.ref, prompt_text=ref_text,
                  cfg_value=2.0, inference_timesteps=10),
             "hifi_00.wav",
         )
     else:
-        print("[note] 未給 --ref-text，略過 Hi-Fi 對照組；#12 的 Hi-Fi vs Controllable 對比需要它。")
+        print("[note] 無逐字稿，略過 Hi-Fi 對照組；#12 的 Hi-Fi vs Controllable 對比需要它。")
 
     # === adapter 取樣率健檢：把第一個輸出降採樣成 24kHz/mono/16-bit（對齊 /api/tts/speech）===
     try:
