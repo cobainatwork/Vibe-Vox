@@ -3,6 +3,10 @@ FROM python:3.13-slim
 
 COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /bin/uv
 
+# FFmpeg：音檔轉碼的執行期依賴（#4 audio 模組）。
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 ENV UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=never \

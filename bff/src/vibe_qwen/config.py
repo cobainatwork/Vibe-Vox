@@ -49,3 +49,16 @@ class Settings:
     max_concurrent_heavy_requests: int = field(
         default_factory=_env("VIBE_QWEN_MAX_CONCURRENT_HEAVY_REQUESTS", "8", int)
     )
+    # 音檔上傳單檔上限（bytes）；超過回 413 語意。25 MiB 對齊常見 ASR 上傳量級。
+    audio_max_bytes: int = field(
+        default_factory=_env("VIBE_QWEN_AUDIO_MAX_BYTES", "26214400", int)
+    )
+    # ASR 目標取樣率預設（provisional）；正確值於 #5 接 VibeVoice-ASR 時確認。
+    # transcode_to_wav 的 sample_rate 為必填參數，模組本身不硬編此值。
+    asr_sample_rate: int = field(
+        default_factory=_env("VIBE_QWEN_ASR_SAMPLE_RATE", "16000", int)
+    )
+    # FFmpeg 轉碼子進程逾時（秒）。
+    ffmpeg_timeout_seconds: float = field(
+        default_factory=_env("VIBE_QWEN_FFMPEG_TIMEOUT_SECONDS", "60", float)
+    )
