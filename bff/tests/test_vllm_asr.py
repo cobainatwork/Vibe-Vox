@@ -59,6 +59,36 @@ def test_transcribe_builds_request_and_parses_segments(tmp_path):
     assert result.transcription_only == "你好"
 
 
+def test_transcribe_converts_simplified_content_to_traditional(tmp_path):
+    # 模型輸出簡體字形；segments/transcription_only 轉台灣繁體（s2tw 純字形，
+    # 不改詞彙），raw_text 保留模型原始輸出供 debug。
+    simplified = json.dumps(
+        {"segments": [{"Start": 0.0, "End": 2.0, "Speaker": "A", "Content": "以真实口吻传达情感"}]},
+        ensure_ascii=False,
+    )
+    client = VllmAsrClient(
+        "http://vllm:8000", "m", transport=httpx.MockTransport(lambda r: _reply(simplified))
+    )
+    result = asyncio.run(client.transcribe(_wav(tmp_path), context=""))
+
+    assert result.segments[0].Content == "以真實口吻傳達情感"
+    assert result.transcription_only == "以真實口吻傳達情感"
+    assert "真实" in result.raw_text  # 原始輸出保留簡體
+
+
+def test_transcribe_converts_plain_text_fallback_to_traditional(tmp_path):
+    # 非 JSON 純文字退路也要轉繁；raw_text 仍保留原始。
+    client = VllmAsrClient(
+        "http://vllm:8000",
+        "m",
+        transport=httpx.MockTransport(lambda r: _reply("传达情感")),
+    )
+    result = asyncio.run(client.transcribe(_wav(tmp_path), context=""))
+
+    assert result.transcription_only == "傳達情感"
+    assert result.raw_text == "传达情感"
+
+
 def test_transcribe_defends_against_non_json_content(tmp_path):
     # 模型回非預期輸出（非 JSON）不得崩潰；退回純文字。
     client = VllmAsrClient(

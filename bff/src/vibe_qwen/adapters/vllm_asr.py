@@ -19,6 +19,7 @@ from typing import Any
 import httpx
 
 from vibe_qwen.adapters.base import Segment, TranscriptionResult
+from vibe_qwen.adapters.zh import to_traditional
 
 
 class AsrUnavailable(Exception):
@@ -93,15 +94,17 @@ def _parse(content: str) -> TranscriptionResult:
             Segment(
                 Start=_as_float(s.get("Start")),
                 End=_as_float(s.get("End")),
-                Speaker=str(s.get("Speaker", "")),
-                Content=str(s.get("Content", "")),
+                Speaker=to_traditional(str(s.get("Speaker", ""))),
+                Content=to_traditional(str(s.get("Content", ""))),
             )
         )
 
     return TranscriptionResult(
         segments=segments,
         raw_text=content,
-        transcription_only="".join(s.Content for s in segments) if segments else content,
+        transcription_only=(
+            "".join(s.Content for s in segments) if segments else to_traditional(content)
+        ),
         duration=max((s.End for s in segments), default=0.0),
     )
 
