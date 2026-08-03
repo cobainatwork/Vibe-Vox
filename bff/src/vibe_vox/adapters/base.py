@@ -11,7 +11,12 @@ from pydantic import BaseModel
 
 
 class Segment(BaseModel):
-    """ASR 輸出的一個語句單位（Who/When/What），欄位形狀為消費端契約約束。"""
+    """ASR 輸出的一個區塊（Who/When/What），欄位形狀為消費端契約約束。
+
+    非語句單位：VibeVoice-ASR 為窮盡連續切分，段界是模型自選的切點而非語音
+    邊界，相鄰段的 End 與下一段 Start 幾乎總是相同。詳見 CONTEXT.md 的
+    Segment 詞條與 docs/api/asr.md §4.3。
+    """
 
     Start: float
     End: float

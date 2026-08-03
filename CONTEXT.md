@@ -25,8 +25,24 @@ _Avoid_: 熱詞加權、關鍵字權重
 _Avoid_: hotword 參數、關鍵字欄位
 
 **Segment**：
-ASR 輸出的一個語句單位，含 `Start`、`End`、`Speaker`、`Content` 四欄。多個 Segment 構成一次辨識的完整結果（Who/When/What）。
-_Avoid_: 句子、片段、utterance（中文語境）
+ASR 輸出的一個區塊，含 `Start`、`End`、`Speaker`、`Content` 四欄。多個 Segment 構成一次辨識的完整結果（Who/When/What）。
+
+VibeVoice-ASR 的分段是**窮盡連續切分**而非語句切分：模型自選切點把音訊切滿，段長約 30–40 秒，段界與句子邊界無關，相鄰段的原始時間戳幾乎相接。故 Segment 不是「一句話」。
+
+經 Forced alignment 後，Segment 的 `Start`／`End` 改由該段首字與末字的實際發音邊界重算，段間才會出現有意義的間隙。
+_Avoid_: 句子、語句單位、片段、utterance（中文語境）
+
+**Word（對齊單位）**：
+Forced alignment 產生時間戳的最小單位。**中文為單一漢字，不是語意上的詞**——「保險經紀人」是五個 Word，不是一個。命名沿用官方語彙，但語意以此定義為準。
+_Avoid_: 詞、詞彙、斷詞結果（本專案不做中文斷詞）
+
+**Forced alignment（強制對齊）**：
+把已知的轉錄文字對回音訊、求出每個 Word 實際發音起訖時刻的動作。與 ASR 是兩件事：ASR 決定「說了什麼」，Forced alignment 只決定「哪個字落在哪一刻」，不更動文字內容。
+_Avoid_: 時間戳校正、對時、同步
+
+**對齊狀態（Alignment status）**：
+單一 Segment 的字級時間戳是否可信的顯式標記。強制對齊無容錯機制，轉錄文字有誤時會靜默對歪，故每段須明示對齊成功與否；未通過合理性檢查者回退為切點時間戳並標記，不以「Word 清單為空」隱含表示。
+_Avoid_: 對齊失敗旗標（僅描述其中一種值）
 
 ### TTS 音色領域
 
