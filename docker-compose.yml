@@ -21,7 +21,7 @@ services:
     build:
       context: ./frontend
     ports:
-      - "80:8080"
+      - "8088:8080"
     depends_on:
       - bff
     networks:
@@ -34,6 +34,7 @@ services:
     build:
       context: .
       dockerfile: docker/vllm.Dockerfile
+    ipc: host   # vLLM 需要（官方 docker run 用 --ipc=host）
     networks:
       - vibe
     restart: unless-stopped

@@ -37,9 +37,9 @@ npm run dev
 3. 等 vllm 起來（首次久、之後快），確認就緒：
    ```bash
    docker compose logs -f vllm            # 看到 vllm serve 就緒
-   curl http://localhost/api/health       # 應回 {"data":{"asr":{"ready":true},...}}
+   curl http://localhost:8088/api/health  # 應回 {"data":{"asr":{"ready":true},...}}
    ```
-4. 瀏覽器開 `http://<遠端機 IP>`（正式版前端在 port 80）→「ASR 測試」分頁 → 上傳音檔 → 送出。
+4. 瀏覽器開 `http://<遠端機 IP>:8088`（正式版前端在 port 8088）→「ASR 測試」分頁 → 上傳音檔 → 送出。
 
 ## 測不通時，把這些給我 debug
 
