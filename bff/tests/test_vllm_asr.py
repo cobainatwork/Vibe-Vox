@@ -46,13 +46,18 @@ def test_transcribe_builds_request_and_parses_segments(tmp_path):
     assert req.url.path == "/v1/chat/completions"
     body = json.loads(req.content)
     assert body["model"] == "vibevoice-asr"
-    assert body["temperature"] == 0  # ASR 需 greedy 解碼，避免隨機取樣造成他語 hallucination
+    assert body["temperature"] == 0  # greedy 解碼
+    assert body["top_p"] == 1.0
+    assert body["repetition_penalty"] == 1.1  # 抑制 repetition/hallucination 迴圈
+    assert body["max_tokens"] > 0  # 動態上限，防無上限 hallucination
+    assert body["messages"][0]["role"] == "system"  # 官方契約：system 定調 JSON 轉錄
     parts = body["messages"][-1]["content"]
     audio = next(p for p in parts if p.get("type") == "audio_url")
     assert audio["audio_url"]["url"].startswith("data:audio/wav;base64,")  # data URL
     text = next(p for p in parts if p.get("type") == "text")["text"]
     assert "Start, End, Speaker, Content" in text  # 官方 prompt 要求輸出四個 key
     assert "台積電" in text  # Hotword context 併入
+    assert "繁體中文" in text  # 強制輸出繁體
 
     assert len(result.segments) == 1
     assert result.segments[0].Speaker == "A"
