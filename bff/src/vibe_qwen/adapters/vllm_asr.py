@@ -12,7 +12,7 @@
 
 import base64
 import json
-import wave
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -38,16 +38,25 @@ def _instruction(duration: float, context: str) -> str:
     )
     if context:
         base += "\n\nContext information (hotwords, speaker names, etc.):\n" + context
+    base += (
+        "\nImportant: You must output the transcription strictly in "
+        "Traditional Chinese (繁體中文)."
+    )
     return base
 
 
-def _wav_duration(path: Path) -> float:
+def _audio_duration(path: Path) -> float:
+    """以 ffprobe 取音檔秒數（對齊官方 test_api.py），支援各格式；失敗回退 1.0，
+    避免 duration 異常使 max_tokens 過小截斷內容或 prompt 秒數不實。"""
+    cmd = [
+        "ffprobe", "-v", "error", "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1", str(path),
+    ]
     try:
-        with wave.open(str(path), "rb") as w:
-            rate = w.getframerate()
-            return w.getnframes() / float(rate) if rate else 0.0
-    except (wave.Error, OSError, ValueError):
-        return 0.0
+        out = subprocess.check_output(cmd, stderr=subprocess.STDOUT).decode().strip()
+        return float(out)
+    except (subprocess.SubprocessError, ValueError, OSError):
+        return 1.0
 
 
 def _extract_content(data: Any) -> str:
@@ -139,21 +148,33 @@ class VllmAsrClient:
     async def transcribe(self, audio: Path, *, context: str) -> TranscriptionResult:
         audio_b64 = base64.b64encode(audio.read_bytes()).decode("ascii")
         data_url = f"data:audio/wav;base64,{audio_b64}"
-        prompt = _instruction(_wav_duration(audio), context)
+        duration = _audio_duration(audio)
+        prompt = _instruction(duration, context)
         payload = {
             "model": self._model,
-            # ASR 為確定性任務，需 greedy 解碼；不指定則 vLLM 用隨機取樣，
-            # 會在低信心片段吐出訓練語料的他語 token（俄/韓等亂碼）。
-            "temperature": 0,
             "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a helpful assistant that transcribes audio "
+                        "input into text output in JSON format."
+                    ),
+                },
                 {
                     "role": "user",
                     "content": [
                         {"type": "audio_url", "audio_url": {"url": data_url}},
                         {"type": "text", "text": prompt},
                     ],
-                }
+                },
             ],
+            # 對齊官方 vllm_plugin（tests/test_api.py、gradio demo）：greedy 解碼、
+            # top_p 1.0、max_tokens 上限。repetition_penalty 與依秒數的動態 max_tokens
+            # 抑制官方已知的 repetition/hallucination 迴圈（見 test_api_auto_recover.py）。
+            "temperature": 0,
+            "top_p": 1.0,
+            "repetition_penalty": 1.1,
+            "max_tokens": int(duration * 10) + 100,
         }
         try:
             async with self._client() as client:
