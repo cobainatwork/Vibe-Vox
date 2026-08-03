@@ -1,0 +1,6 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# uv 虛擬環境（uv.lock 仍納版控以確保可重現建置）
+.venv/

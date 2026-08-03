@@ -1,0 +1,18 @@
+# aligner image 的 build context 是 repo 根（Dockerfile 位於 docker/），故需排除
+# 本機產物，否則整個 node_modules 與 venv 都會送進 daemon。
+# 本機環境設定含部署位址（根層 .gitignore 亦排除），不得送進 build context。
+.env
+.env.local
+
+.git
+.github
+**/node_modules
+**/.venv
+**/__pycache__
+**/*.pyc
+frontend/dist
+bff/var
+docs
+spikes
+.claude
+.playwright-mcp

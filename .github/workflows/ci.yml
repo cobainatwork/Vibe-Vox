@@ -25,6 +25,25 @@ jobs:
       - name: Run tests
         run: uv run pytest
 
+  aligner:
+    name: Aligner (pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: aligner
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      # lock 檔只含 HTTP 層的輕依賴；torch 與 qwen-asr 僅存在於 aligner image，
+      # 由 QwenAligner 延遲 import，故本 job 不需 GPU。
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Run tests
+        run: uv run pytest
+
   frontend:
     name: Frontend (typecheck / test / build)
     runs-on: ubuntu-latest

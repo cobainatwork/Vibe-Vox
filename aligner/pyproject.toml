@@ -1,0 +1,32 @@
+[project]
+name = "vibe-vox-aligner"
+version = "0.1.0"
+description = "Vibe-Vox 字級強制對齊服務：Qwen3-ForcedAligner 的薄 HTTP 包裝"
+requires-python = ">=3.12"
+# torch 與 qwen-asr 刻意不在此宣告：兩者僅存在於 aligner image（見
+# docker/aligner.Dockerfile），由 QwenAligner 於 load() 內延遲 import。
+# 如此本服務的測試不需 GPU 即可在 CI 執行，lock 檔亦不必解析 CUDA wheel。
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "python-multipart>=0.0.9",
+    "numpy>=2.0",
+    "soundfile>=0.12",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vibe_vox_aligner"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

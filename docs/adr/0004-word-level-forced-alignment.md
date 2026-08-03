@@ -23,7 +23,9 @@ VibeVoice-ASR 自身的時間戳無法支撐此用途。它的分段語義是**�
      → BFF 合併 + 合理性檢查   → segments[].words[] + 對齊狀態 + 彙總數字
 ```
 
-VibeVoice 的切點時間戳降級為**切片依據**：段長 30–40 秒遠低於 aligner 的 300 秒上限，逐段對齊使單段對歪不污染其他段。切片左右各留 buffer 吸收漂移，對齊後扣除。
+VibeVoice 的切點時間戳降級為**切片依據**：段長 30–40 秒遠低於 aligner 的 **180 秒**上限，逐段對齊使單段對歪不污染其他段。切片左右各留 buffer 吸收漂移，對齊後扣除。
+
+上限值以 `qwen-asr` 原始碼為準（`qwen_asr/inference/utils.py` 的 `MAX_FORCE_ALIGN_INPUT_SECONDS = 180`），非 model card 宣稱的 5 分鐘。套件本身不強制檢查，逾限會靜默對歪，故由 aligner 服務擋下。
 
 以下六項經與消費端負責人逐項確認：
 
@@ -53,9 +55,10 @@ VibeVoice 的切點時間戳降級為**切片依據**：段長 30–40 秒遠低
 
 - **三模型共用單張 RTX 6000 Ada 48GB**，更新 ADR-0001 的分配：vLLM 26–29 GB（`gpu_memory_utilization` 0.55–0.6）+ VoxCPM2 約 8 GB + aligner 3–4 GB = 37–41 GB，餘裕 7–11 GB。aligner 的 activation 為估算值而非實測，實作時先量測單段峰值再開 batch。
 - **ASR 文字品質成為時間戳品質的前置條件**。強制對齊無容錯機制（訓練以 MFA pseudo-label，假設 text 與 audio 完全對應），轉錄若含亂碼、漏字、多字會靜默對歪。故 #23（prompt 對齊訓練格式）由可選優化升格為必要前置。
-- **時間解析度 80ms**（離散索引，300 秒 ÷ 0.08 = 3750 類別）。可穩定分辨的最小停頓約 80–160ms；話術評分關心的猶豫、卡頓多在 300ms 以上，故足夠。80ms 以下的微停頓測不出，該尺度屬協同發音範疇，本不應計入評分。
+- **時間解析度 80ms**（`config.json` 的 `timestamp_segment_time`；模型輸出的離散索引乘以此值即毫秒）。可穩定分辨的最小停頓約 80–160ms；話術評分關心的猶豫、卡頓多在 300ms 以上，故足夠。80ms 以下的微停頓測不出，該尺度屬協同發音範疇，本不應計入評分。
 - **回應體積顯著增加**。中文語速約每分鐘 200–300 字，60 分鐘音檔產生逾萬個 Word 物件，約增 700 KB。上傳上限已為 200 MB，此量級無虞，但消費端須知回應不再是小 JSON。
-- 模型有兩種發布形式：`Qwen3-ForcedAligner-0.6B` 走 `qwen-asr` 套件、`-hf` 走 transformers 的 `AutoModelForTokenClassification`。權重預抓後 bake 進 image，與 vllm image 同樣做法，離線可跑。
+- 模型有兩種發布形式，**採 `Qwen3-ForcedAligner-0.6B` 走 `qwen-asr` 套件**（#26 定案）。`-hf` 變體走 transformers 的 `AutoModelForTokenClassification`，但在官方 Transformers release 納入前需自 git 安裝 transformers，版本釘不住、build 不可重現；`qwen-asr` 0.0.6 自身釘死 `transformers==4.57.6`，且為官方 model card 的首選範例。兩者同屬 transformers backend，此選擇不改變本決策。權重預抓後 bake 進 image，與 vllm image 同樣做法，離線可跑。
+- **標點與符號不產生 Word**。`qwen-asr` 的 `clean_token` 只保留 Unicode 字母、數字與 `'`，其餘字元在送入模型前即被剝除，故 `words` 的數量不等於 `Content` 的字元數。T3 的合理性檢查不可以「兩者相等」為判準，否則每段都會被誤判為對齊失敗。
 - **服務須無狀態**。測試區不實作併發（無跨請求佇列、worker 池），但 prod 確定為多併發架構，故不得使用全域可變狀態或假設獨佔 GPU，屆時加 replica 或補 batch queue 即可，不必重寫。prod 的 VRAM 餘裕會被併發吃掉，需另行重算。
 - 連動 ADR-0003：消費端契約擴充 `words`、對齊狀態與四個彙總數字。
 - 連動 `CONTEXT.md`：Segment 定義修正（非語句單位），新增 Word、Forced alignment、對齊狀態三個詞條。
