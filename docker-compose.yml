@@ -1,4 +1,4 @@
-# Vibe-Qwen 正式版編排：四部署單元，vLLM 與 TTS 共用單張 GPU。
+# Vibe-Vox 正式版編排：四部署單元，vLLM 與 TTS 共用單張 GPU。
 # 注意：vllm 與 tts 的映像、模型 id 與服務層實作待 spec Further Notes 所述 spike
 # 定案（見 #2/#4）；此處以合理預設宣告部署拓撲，adapter 對接於對應票交付。
 
@@ -7,9 +7,9 @@ services:
     build:
       context: ./bff
     environment:
-      VIBE_QWEN_FRONTEND_ORIGINS: "http://localhost"
-      VIBE_QWEN_ASR_BASE_URL: "http://vllm:8000"
-      VIBE_QWEN_TTS_BASE_URL: "http://tts:9000"
+      VIBE_VOX_FRONTEND_ORIGINS: "http://localhost"
+      VIBE_VOX_ASR_BASE_URL: "http://vllm:8000"
+      VIBE_VOX_TTS_BASE_URL: "http://tts:9000"
     depends_on:
       vllm:
         condition: service_started
@@ -50,7 +50,7 @@ services:
     # Qwen3-TTS 獨立服務程序（映像與實作待 spike 定案）。
     # 尚未實作：置於 tts profile，預設不啟動；ASR 測試不需它（bff 的 tts_client 為 stub）。
     profiles: ["tts"]
-    image: ${VIBE_QWEN_TTS_IMAGE:-PLACEHOLDER_QWEN3_TTS_IMAGE}
+    image: ${VIBE_VOX_TTS_IMAGE:-PLACEHOLDER_QWEN3_TTS_IMAGE}
     networks:
       - vibe
     restart: unless-stopped

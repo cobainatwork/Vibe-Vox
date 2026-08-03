@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from vibe_qwen.adapters.base import Segment, TranscriptionResult
+from vibe_vox.adapters.base import Segment, TranscriptionResult
 
 # dev / 無 GPU 環境的預設假辨識，讓 UI 在無模型服務時仍可操作。
 DEFAULT_STUB_ASR_RESULT = TranscriptionResult(

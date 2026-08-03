@@ -7,14 +7,14 @@ from fastapi import APIRouter, File, Query, Request, UploadFile
 from pydantic import BaseModel
 from starlette.responses import JSONResponse, Response
 
-from vibe_qwen.hotword_io import (
+from vibe_vox.hotword_io import (
     ImportLimitExceeded,
     parse_import,
     to_csv,
     to_export_rows,
 )
-from vibe_qwen.hotword_text import compile_context, enforce_context_budget
-from vibe_qwen.persistence.hotwords import HotwordNotFound
+from vibe_vox.hotword_text import compile_context, enforce_context_budget
+from vibe_vox.persistence.hotwords import HotwordNotFound
 
 router = APIRouter()
 

@@ -1,7 +1,7 @@
-# 研究：IndexTTS 是否滿足 Vibe-Qwen 的 clone + 情緒控制 + 台灣口語化需求
+# 研究：IndexTTS 是否滿足 Vibe-Vox 的 clone + 情緒控制 + 台灣口語化需求
 
 日期：2026-07-23
-研究問題：開源專案 IndexTTS（GitHub `index-tts/index-tts`）能否滿足 Vibe-Qwen 的三項核心需求，(A) 對「克隆出的音色」做情緒控制且最好可逐句調整、(B) 產出台灣口語化中文語音、(C) 與 VibeVoice-ASR 共存於單張 RTX 6000 Ada 48GB 並包進現行 `TtsClient` adapter 對齊 `/api/tts/speech` 契約。
+研究問題：開源專案 IndexTTS（GitHub `index-tts/index-tts`）能否滿足 Vibe-Vox 的三項核心需求，(A) 對「克隆出的音色」做情緒控制且最好可逐句調整、(B) 產出台灣口語化中文語音、(C) 與 VibeVoice-ASR 共存於單張 RTX 6000 Ada 48GB 並包進現行 `TtsClient` adapter 對齊 `/api/tts/speech` 契約。
 可信度分級：每條結論後標註來源，區分「官方 primary」與「社群」。無來源佐證者明寫「無來源，無法證實／需實測」，不臆測。
 
 ---
@@ -23,7 +23,7 @@
    - adapter：官方無 HTTP／OpenAI 端點，但 `IndexTTS2.infer()` 直接產 wav，包一層薄 FastAPI 即可對齊 `/api/tts/speech`；需在 adapter 內把原生 22.05kHz 重採樣為 24kHz/mono/16-bit（見 7）。整合成本低。
 
 4. 總判：**應取代 Qwen3-TTS（作為情緒可控 clone 引擎），但落地前須過兩道 spike（台灣口語化、效能/延遲）與一道法務確認（bilibili 授權）**。
-   - 依據：Vibe-Qwen 既有確認缺口是「Qwen3-TTS 的 clone 路徑不支援 instruct／情緒」（見 sibling note `2026-07-23-qwen3-tts-clone-instruct-research.md`）。IndexTTS2 以 timbre-emotion 解耦直接補上此缺口，且情緒可逐句、可用情緒參考音或文字描述驅動，能力嚴格優於 Qwen3-TTS clone 路徑。
+   - 依據：Vibe-Vox 既有確認缺口是「Qwen3-TTS 的 clone 路徑不支援 instruct／情緒」（見 sibling note `2026-07-23-qwen3-tts-clone-instruct-research.md`）。IndexTTS2 以 timbre-emotion 解耦直接補上此缺口，且情緒可逐句、可用情緒參考音或文字描述驅動，能力嚴格優於 Qwen3-TTS clone 路徑。
    - 保留條件：授權由 Qwen3-TTS 的 Apache-2.0 變為 bilibili Model Use License Agreement（source-available，非 OSI 開源，見 8）；台灣口語化無官方依據；IndexTTS2 的 GPT 尚無成熟 vLLM 加速（效能風險，見 6.4）。三者未清前，建議先以並存試點驗證再全面取代。
 
 ---
@@ -114,7 +114,7 @@ tts.infer(spk_audio_prompt='examples/voice_12.wav', text=text,
 
 demo page 逐字確認三種組合，含「distinct audio prompts as references for timbre and emotional expression, respectively」，即音色與情緒可用兩段不同參考音各自指定。〔官方 primary〕 https://index-tts.github.io/index-tts2.github.io/
 
-判定：Vibe-Qwen 需求 (A)「用克隆音色講話、情緒獨立指定」直接由 `spk_audio_prompt`（克隆音色）+ `emo_*`（情緒）達成。這正是 Qwen3-TTS clone 路徑缺的能力。
+判定：Vibe-Vox 需求 (A)「用克隆音色講話、情緒獨立指定」直接由 `spk_audio_prompt`（克隆音色）+ `emo_*`（情緒）達成。這正是 Qwen3-TTS clone 路徑缺的能力。
 
 ### 4.3 逐句（per-utterance）調整：可行（推得）
 
@@ -212,7 +212,7 @@ GPT 主體：24 層、dim 1280、20 attention heads、text tokens 12000、mel co
    - 商用門檻條款（逐字）：「If You intend to Use, or have already Used, the Model or any Derivative Work, and either (i) your or any of your Affiliates' products or services had more than 100 million monthly active users in the immediately preceding calendar month, or (ii) your or any of your Affiliates' annual revenue in the immediately preceding calendar year exceeded RMB 1 billion, You must request a separated license from us」。
    - 即：月活 > 1 億 或 年營收 > 人民幣 10 億，須另申請授權；未達門檻者在 royalty-free limited license 下可自架使用。授權文本**未逐句明文寫「商用允許」**，故對商業自架是否完全無虞，建議法務確認（見風險）。
 4. 使用限制：明文禁止高風險用途（醫療診斷、自動駕駛、軍事、自動化決策等）；衍生用途限制（不得用以改進 bilibili 以外的商業 AI 系統）；使用者負第三方索賠之賠償責任。治理法為中國法、上海仲裁委員會管轄。〔官方 primary〕 https://github.com/index-tts/index-tts/blob/main/LICENSE
-5. 對 Vibe-Qwen 的意涵：作為未達門檻的自架平台，授權足以自架與（限制下）商用；但相對 Qwen3-TTS 的 Apache-2.0，這是更受限的授權，且治理法為中國法，屬需法務確認的變更點。
+5. 對 Vibe-Vox 的意涵：作為未達門檻的自架平台，授權足以自架與（限制下）商用；但相對 Qwen3-TTS 的 Apache-2.0，這是更受限的授權，且治理法為中國法，屬需法務確認的變更點。
 
 ---
 

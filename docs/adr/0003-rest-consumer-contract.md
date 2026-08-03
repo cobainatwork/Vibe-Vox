@@ -6,7 +6,7 @@ accepted
 
 ## Decision
 
-Vibe-Qwen 對消費者 AI_practise（智能陪練平台）提供 REST 契約：ASR 為 `POST /api/asr/transcribe`（回合制批次，回 `{segments:[{Start,End,Speaker,Content}], ...}`）、TTS 為 `/api/tts/*`（OpenAI 相容 `/api/tts/speech`，含可選串流回應）、Hotwords 為 `/api/hotwords`。放棄現行生產系統的 `ws://host:8088/ws/asr` WebSocket ASR 傳輸。TTS 後端由 CosyVoice 換為 Qwen3-TTS，維持 `/api/tts/speech` 契約形狀。
+Vibe-Vox 對消費者 AI_practise（智能陪練平台）提供 REST 契約：ASR 為 `POST /api/asr/transcribe`（回合制批次，回 `{segments:[{Start,End,Speaker,Content}], ...}`）、TTS 為 `/api/tts/*`（OpenAI 相容 `/api/tts/speech`，含可選串流回應）、Hotwords 為 `/api/hotwords`。放棄現行生產系統的 `ws://host:8088/ws/asr` WebSocket ASR 傳輸。TTS 後端由 CosyVoice 換為 Qwen3-TTS，維持 `/api/tts/speech` 契約形狀。
 
 ## Considered Options
 

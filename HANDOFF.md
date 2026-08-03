@@ -1,4 +1,4 @@
-# Vibe-Qwen ASR 交接文件
+# Vibe-Vox ASR 交接文件
 
 **日期**：2026-08-03
 **分支**：main，本地與 `origin/main` 同步於 `cc222fa`
@@ -27,7 +27,7 @@ ASR 端到端管線**已跑通**（上傳 → vLLM 辨識 → 回傳 → 前端�
 
 ### 給接手者的直接建議
 
-**優先考慮直接對接 `server/app.py` 的辨識邏輯，而不是沿用本 repo 目前的 `bff/src/vibe_qwen/adapters/vllm_asr.py`。** 理由：`server/app.py` 是使用者驗證過能用的；本 repo 的 `vllm_asr.py` 是「對照官方契約推導」的結果、**尚未經 GPU 實測**。用已驗證的東西，不要再從頭重寫後靠遠端 rebuild 慢慢試。
+**優先考慮直接對接 `server/app.py` 的辨識邏輯，而不是沿用本 repo 目前的 `bff/src/vibe_vox/adapters/vllm_asr.py`。** 理由：`server/app.py` 是使用者驗證過能用的；本 repo 的 `vllm_asr.py` 是「對照官方契約推導」的結果、**尚未經 GPU 實測**。用已驗證的東西，不要再從頭重寫後靠遠端 rebuild 慢慢試。
 
 ### 本 session 最大教訓（別再犯）
 
@@ -37,7 +37,7 @@ ASR 端到端管線**已跑通**（上傳 → vLLM 辨識 → 回傳 → 前端�
 
 ## 2. ASR client 正確契約（本 session 最後對齊的狀態）
 
-檔案：`bff/src/vibe_qwen/adapters/vllm_asr.py`
+檔案：`bff/src/vibe_vox/adapters/vllm_asr.py`
 
 官方 payload（交叉自 `test_api.py` + gradio demo，`cc222fa` 已實作）：
 
@@ -53,7 +53,7 @@ ASR 端到端管線**已跑通**（上傳 → vLLM 辨識 → 回傳 → 前端�
 | duration | `ffprobe`（`_audio_duration`）| 官方 |
 | 音檔 | `audio_url` data URL（轉碼後 16k wav）| 官方 |
 
-繁體另有後處理：`bff/src/vibe_qwen/adapters/zh.py` 用 OpenCC **`s2tw`**（純字形、**不含**慣用詞轉換；使用者明確要求保留辨識的實際詞彙，故非 `s2twp`）。只轉 `segments`/`transcription_only`，`raw_text` 保留模型原始輸出。
+繁體另有後處理：`bff/src/vibe_vox/adapters/zh.py` 用 OpenCC **`s2tw`**（純字形、**不含**慣用詞轉換；使用者明確要求保留辨識的實際詞彙，故非 `s2twp`）。只轉 `segments`/`transcription_only`，`raw_text` 保留模型原始輸出。
 
 ---
 
@@ -99,14 +99,14 @@ ASR 端到端管線**已跑通**（上傳 → vLLM 辨識 → 回傳 → 前端�
 - **架構**：docker compose 四單元 — bff(FastAPI) + frontend(nginx, 對外 **8088**) + vllm(VibeVoice-ASR, GPU) + tts(profile，未啟用)。
 - **遠端 GPU 機**：測試位址 `http://10.2.66.102:8088`（同 #10/#11 那台）。
 - **rebuild**：`git pull && docker compose up -d --build`（模型已 bake 進 vllm image，不會重下）。
-- **本機（Windows）**：有 docker，可跑 **stub e2e**（非 GPU 部分：Origin、nginx、上傳上限）——起 frontend+bff(`VIBE_QWEN_USE_STUB_MODELS=true`)、`--no-deps` 跳過需 GPU 的 vllm。但**無 GPU，不能真辨識**（辨識品質只能遠端測）。
+- **本機（Windows）**：有 docker，可跑 **stub e2e**（非 GPU 部分：Origin、nginx、上傳上限）——起 frontend+bff(`VIBE_VOX_USE_STUB_MODELS=true`)、`--no-deps` 跳過需 GPU 的 vllm。但**無 GPU，不能真辨識**（辨識品質只能遠端測）。
 - **模型權重**：`microsoft/VibeVoice-ASR`（非 -HF），bake 在 `docker/vllm.Dockerfile`，served-name `vibevoice`。
 
 ---
 
 ## 6. 其他待辦（本 session 未動）
 
-- **專案改名** Vibe-Qwen → Vibe-Vox（使用者處理 github repo + 本地目錄；repo 內部引用：Python package `vibe_qwen`、docker/compose、`docs/agents/issue-tracker.md` 的 repo ref 待改）。
+- ~~**專案改名** Vibe-Qwen → Vibe-Vox~~ **已完成**（2026-08-03）：GitHub repo、本地目錄由使用者處理；repo 內部引用（Python package `vibe_qwen`→`vibe_vox`、環境變數前綴 `VIBE_QWEN_`→`VIBE_VOX_`、docker/compose、發布名、文件）由 `chore/rename-vibe-vox` 一次改完。
 - **TTS**：引擎已定案 VoxCPM2（取代 spec 的 Qwen3-TTS），但 `CONTEXT.md`/`docs/spec.md` 尚未更新；wayfinder map #13（frontier tickets）未動。
 - **工作區 untracked**：`.claude/`、`.playwright-mcp/`、`spikes/`（未納管，接手者自行判斷是否 gitignore）。
 

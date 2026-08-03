@@ -11,17 +11,17 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from vibe_qwen.adapters.base import Segment, TranscriptionResult
-from vibe_qwen.adapters.stub import StubAsrClient
-from vibe_qwen.adapters.vllm_asr import AsrTimeout, AsrUnavailable, VllmAsrClient
-from vibe_qwen.audio.errors import (
+from vibe_vox.adapters.base import Segment, TranscriptionResult
+from vibe_vox.adapters.stub import StubAsrClient
+from vibe_vox.adapters.vllm_asr import AsrTimeout, AsrUnavailable, VllmAsrClient
+from vibe_vox.audio.errors import (
     FileTooLarge,
     TranscodeError,
     TranscodeTimeout,
     UnsupportedAudioFormat,
 )
-from vibe_qwen.config import Settings
-from vibe_qwen.main import create_app
+from vibe_vox.config import Settings
+from vibe_vox.main import create_app
 
 
 class _FakeIntake:

@@ -10,7 +10,7 @@ import asyncio
 import uuid
 from pathlib import Path
 
-from vibe_qwen.audio.errors import TranscodeError, TranscodeTimeout
+from vibe_vox.audio.errors import TranscodeError, TranscodeTimeout
 
 
 async def transcode_to_wav(

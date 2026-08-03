@@ -113,7 +113,7 @@ export function App() {
       <header className="app__header">
         <div className="brand">
           <span className="brand__mark" aria-hidden="true">◑</span>
-          Vibe-Qwen 主控台
+          Vibe-Vox 主控台
         </div>
         <StatusStrip state={state} />
       </header>

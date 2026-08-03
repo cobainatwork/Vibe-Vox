@@ -18,7 +18,7 @@ docker compose -f docker-compose.dev.yml up --build
 ```bash
 # 終端 1：bff（stub 模式）
 cd bff
-VIBE_QWEN_USE_STUB_MODELS=true uv run uvicorn vibe_qwen.main:create_app --factory --port 8000
+VIBE_VOX_USE_STUB_MODELS=true uv run uvicorn vibe_vox.main:create_app --factory --port 8000
 
 # 終端 2：前端
 cd frontend

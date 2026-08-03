@@ -5,8 +5,8 @@
 
 from fastapi.testclient import TestClient
 
-from vibe_qwen.config import Settings
-from vibe_qwen.main import create_app
+from vibe_vox.config import Settings
+from vibe_vox.main import create_app
 
 
 def _client(tmp_path) -> TestClient:

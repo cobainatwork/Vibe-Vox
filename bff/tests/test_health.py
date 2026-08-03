@@ -2,9 +2,9 @@
 
 from fastapi.testclient import TestClient
 
-from vibe_qwen.adapters.stub import StubAsrClient, StubTtsClient
-from vibe_qwen.config import Settings
-from vibe_qwen.main import create_app
+from vibe_vox.adapters.stub import StubAsrClient, StubTtsClient
+from vibe_vox.config import Settings
+from vibe_vox.main import create_app
 
 
 def test_health_reports_both_services_ready_with_stub_adapters():

@@ -2,8 +2,8 @@
 
 from fastapi.testclient import TestClient
 
-from vibe_qwen.config import Settings
-from vibe_qwen.main import create_app
+from vibe_vox.config import Settings
+from vibe_vox.main import create_app
 
 
 def _client(tmp_path) -> TestClient:
@@ -13,11 +13,11 @@ def _client(tmp_path) -> TestClient:
 def test_create_hotword_returns_full_shape(tmp_path):
     client = _client(tmp_path)
 
-    resp = client.post("/api/admin/hotwords", json={"term": "Vibe-Qwen", "note": "產品名"})
+    resp = client.post("/api/admin/hotwords", json={"term": "Vibe-Vox", "note": "產品名"})
 
     assert resp.status_code == 201
     data = resp.json()["data"]
-    assert data["term"] == "Vibe-Qwen"
+    assert data["term"] == "Vibe-Vox"
     assert data["note"] == "產品名"
     assert data["enabled"] is True
     assert isinstance(data["id"], str) and len(data["id"]) >= 32

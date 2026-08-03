@@ -11,8 +11,8 @@ import time
 import httpx
 from httpx import ASGITransport
 
-from vibe_qwen.config import Settings
-from vibe_qwen.main import create_app
+from vibe_vox.config import Settings
+from vibe_vox.main import create_app
 
 
 def _heavy_app(**settings_kw):

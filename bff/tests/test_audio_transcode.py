@@ -12,9 +12,9 @@ import subprocess
 
 import pytest
 
-from vibe_qwen.audio.errors import TranscodeError, TranscodeTimeout
-from vibe_qwen.audio.intake import AudioIntake
-from vibe_qwen.audio.transcode import transcode_to_wav
+from vibe_vox.audio.errors import TranscodeError, TranscodeTimeout
+from vibe_vox.audio.intake import AudioIntake
+from vibe_vox.audio.transcode import transcode_to_wav
 
 need_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="需要 ffmpeg")
 

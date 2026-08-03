@@ -18,8 +18,8 @@ from typing import Any
 
 import httpx
 
-from vibe_qwen.adapters.base import Segment, TranscriptionResult
-from vibe_qwen.adapters.zh import to_traditional
+from vibe_vox.adapters.base import Segment, TranscriptionResult
+from vibe_vox.adapters.zh import to_traditional
 
 
 class AsrUnavailable(Exception):

@@ -12,7 +12,7 @@
 
 ## 2. 模組邊界與介面
 
-新增套件 `bff/src/vibe_qwen/audio/`，拆為單一職責、可獨立測試的單元：
+新增套件 `bff/src/vibe_vox/audio/`，拆為單一職責、可獨立測試的單元：
 
 ### 2.1 `sniff.py` — 型別判定（純函式，零依賴）
 
@@ -51,9 +51,9 @@
 
 ## 3. 設定（`config.py` 新增）
 
-- `VIBE_QWEN_AUDIO_MAX_BYTES`：單檔上限（bytes），超過回 413 語意。預設 `26214400`（25 MiB，對齊常見 ASR 上傳量級的參考值），可經環境變數覆寫。
-- `VIBE_QWEN_ASR_SAMPLE_RATE`：ASR 目標取樣率預設。此值正確性於 #5 接 VibeVoice-ASR 時確認；`transcode_to_wav` 的 `sample_rate` 為必填參數，模組本身不硬編。
-- `VIBE_QWEN_FFMPEG_TIMEOUT_SECONDS`：轉碼子進程逾時。
+- `VIBE_VOX_AUDIO_MAX_BYTES`：單檔上限（bytes），超過回 413 語意。預設 `26214400`（25 MiB，對齊常見 ASR 上傳量級的參考值），可經環境變數覆寫。
+- `VIBE_VOX_ASR_SAMPLE_RATE`：ASR 目標取樣率預設。此值正確性於 #5 接 VibeVoice-ASR 時確認；`transcode_to_wav` 的 `sample_rate` 為必填參數，模組本身不硬編。
+- `VIBE_VOX_FFMPEG_TIMEOUT_SECONDS`：轉碼子進程逾時。
 - 沿用既有 `temp_dir`／`temp_max_age_seconds`。
 
 ## 4. 資料流

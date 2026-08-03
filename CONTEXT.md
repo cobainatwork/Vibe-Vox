@@ -1,4 +1,4 @@
-# Vibe-Qwen
+# Vibe-Vox
 
 自架的 ASR/TTS 測試與管理平台。ASR 由 VibeVoice-ASR 提供、TTS 由 Qwen3-TTS 提供，前端為單一統一操作頁，涵蓋 Hotwords 管理、ASR 測試、TTS 測試與音色管理。
 

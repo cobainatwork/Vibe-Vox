@@ -1,6 +1,6 @@
 """Settings 的環境變數對接。"""
 
-from vibe_qwen.config import Settings
+from vibe_vox.config import Settings
 
 
 def test_asr_base_url_defaults_to_compose_vllm():
@@ -9,5 +9,5 @@ def test_asr_base_url_defaults_to_compose_vllm():
 
 
 def test_asr_base_url_reads_env(monkeypatch):
-    monkeypatch.setenv("VIBE_QWEN_ASR_BASE_URL", "http://10.0.0.5:8000")
+    monkeypatch.setenv("VIBE_VOX_ASR_BASE_URL", "http://10.0.0.5:8000")
     assert Settings().asr_base_url == "http://10.0.0.5:8000"

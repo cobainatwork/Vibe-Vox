@@ -7,31 +7,31 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
-from vibe_qwen.adapters.base import AsrClient, TtsClient
-from vibe_qwen.adapters.stub import (
+from vibe_vox.adapters.base import AsrClient, TtsClient
+from vibe_vox.adapters.stub import (
     DEFAULT_STUB_ASR_RESULT,
     StubAsrClient,
     StubTtsClient,
 )
-from vibe_qwen.adapters.vllm_asr import AsrTimeout, AsrUnavailable, VllmAsrClient
-from vibe_qwen.api.admin_hotwords import router as admin_hotwords_router
-from vibe_qwen.api.asr import InvalidExtraTerms, router as asr_router
-from vibe_qwen.api.health import router as health_router
-from vibe_qwen.api.hotwords import router as hotwords_router
-from vibe_qwen.audio.errors import (
+from vibe_vox.adapters.vllm_asr import AsrTimeout, AsrUnavailable, VllmAsrClient
+from vibe_vox.api.admin_hotwords import router as admin_hotwords_router
+from vibe_vox.api.asr import InvalidExtraTerms, router as asr_router
+from vibe_vox.api.health import router as health_router
+from vibe_vox.api.hotwords import router as hotwords_router
+from vibe_vox.audio.errors import (
     FileTooLarge,
     TranscodeError,
     TranscodeTimeout,
     UnsupportedAudioFormat,
 )
-from vibe_qwen.audio.intake import AudioIntake
-from vibe_qwen.config import Settings
-from vibe_qwen.files.cleanup import cleanup_expired_temp_files
-from vibe_qwen.hotword_io import ImportLimitExceeded, ImportParseError
-from vibe_qwen.hotword_text import ContextBudgetExceeded, InvalidHotwordTerm
-from vibe_qwen.middleware.limits import HeavyRequestGuard, HeavyRequestRejected
-from vibe_qwen.middleware.origin import OriginGuardMiddleware
-from vibe_qwen.persistence.hotwords import HotwordNotFound, HotwordRepository
+from vibe_vox.audio.intake import AudioIntake
+from vibe_vox.config import Settings
+from vibe_vox.files.cleanup import cleanup_expired_temp_files
+from vibe_vox.hotword_io import ImportLimitExceeded, ImportParseError
+from vibe_vox.hotword_text import ContextBudgetExceeded, InvalidHotwordTerm
+from vibe_vox.middleware.limits import HeavyRequestGuard, HeavyRequestRejected
+from vibe_vox.middleware.origin import OriginGuardMiddleware
+from vibe_vox.persistence.hotwords import HotwordNotFound, HotwordRepository
 
 
 def _default_asr_client(settings: Settings) -> AsrClient:
@@ -58,7 +58,7 @@ def create_app(
         cleanup_expired_temp_files(settings.temp_dir, settings.temp_max_age_seconds)
         yield
 
-    app = FastAPI(title="Vibe-Qwen BFF", lifespan=lifespan)
+    app = FastAPI(title="Vibe-Vox BFF", lifespan=lifespan)
     app.state.settings = settings
     app.state.asr_client = asr_client or _default_asr_client(settings)
     app.state.tts_client = tts_client or StubTtsClient()

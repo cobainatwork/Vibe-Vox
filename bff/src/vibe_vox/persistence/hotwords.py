@@ -10,8 +10,8 @@ from os import PathLike
 from pathlib import Path
 from uuid import uuid4
 
-from vibe_qwen.hotword_text import clean_term
-from vibe_qwen.persistence.db import connect
+from vibe_vox.hotword_text import clean_term
+from vibe_vox.persistence.db import connect
 
 
 class HotwordNotFound(Exception):

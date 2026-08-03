@@ -5,9 +5,9 @@ import time
 
 from fastapi.testclient import TestClient
 
-from vibe_qwen.config import Settings
-from vibe_qwen.files.cleanup import cleanup_expired_temp_files
-from vibe_qwen.main import create_app
+from vibe_vox.config import Settings
+from vibe_vox.files.cleanup import cleanup_expired_temp_files
+from vibe_vox.main import create_app
 
 
 def test_cleanup_removes_expired_files_and_keeps_fresh(tmp_path):
