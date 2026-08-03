@@ -38,7 +38,21 @@ class _Item:
     text: str
 
 
-def _build_batch(raw: str, payloads: list[bytes], max_items: int) -> list[_Item]:
+def _require_batch_within_limit(audio_count: int, max_items: int) -> None:
+    """擋下過大的 batch。
+
+    須在讀檔前呼叫：本上限的目的就是別把大請求收進記憶體，讀完才拒等於白收。
+    撞 VRAM 只會得到 CUDA OOM，且會波及共用同卡的 vllm 與 tts。
+    """
+    if audio_count > max_items:
+        raise AlignerError(
+            400,
+            "BATCH_TOO_LARGE",
+            f"單次 {audio_count} 段超過上限 {max_items} 段，請分批送。",
+        )
+
+
+def _build_batch(raw: str, payloads: list[bytes]) -> list[_Item]:
     """解析 items 並與音訊逐筆配對。"""
     try:
         parsed = json.loads(raw)
@@ -52,13 +66,6 @@ def _build_batch(raw: str, payloads: list[bytes], max_items: int) -> list[_Item]
             400,
             "BATCH_SIZE_MISMATCH",
             f"items 有 {len(parsed)} 筆、音訊有 {len(payloads)} 個，數量須相同。",
-        )
-    if len(parsed) > max_items:
-        # 撞 VRAM 只會得到 CUDA OOM，且會波及共用同卡的 vllm 與 tts。
-        raise AlignerError(
-            400,
-            "BATCH_TOO_LARGE",
-            f"單次 {len(parsed)} 段超過上限 {max_items} 段，請分批送。",
         )
 
     batch: list[_Item] = []
@@ -172,8 +179,9 @@ def create_app(
         audio: list[UploadFile] = File(...),
     ) -> dict:
         model = _require_aligner(app)
+        _require_batch_within_limit(len(audio), settings.max_batch_items)
         payloads = [await file.read() for file in audio]
-        batch = _build_batch(items, payloads, settings.max_batch_items)
+        batch = _build_batch(items, payloads)
 
         if not app.state.gpu_slots.acquire(blocking=False):
             raise AlignerError(503, "TOO_MANY_REQUESTS", "對齊服務忙碌中，請退避後重試。")

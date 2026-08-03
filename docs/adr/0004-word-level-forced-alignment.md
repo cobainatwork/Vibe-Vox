@@ -59,6 +59,7 @@ VibeVoice 的切點時間戳降級為**切片依據**：段長 30–40 秒遠低
 - **回應體積顯著增加**。中文語速約每分鐘 200–300 字，60 分鐘音檔產生逾萬個 Word 物件，約增 700 KB。上傳上限已為 200 MB，此量級無虞，但消費端須知回應不再是小 JSON。
 - 模型有兩種發布形式，**採 `Qwen3-ForcedAligner-0.6B` 走 `qwen-asr` 套件**（#26 定案）。`-hf` 變體走 transformers 的 `AutoModelForTokenClassification`，但在官方 Transformers release 納入前需自 git 安裝 transformers，版本釘不住、build 不可重現；`qwen-asr` 0.0.6 自身釘死 `transformers==4.57.6`，且為官方 model card 的首選範例。兩者同屬 transformers backend，此選擇不改變本決策。權重預抓後 bake 進 image，與 vllm image 同樣做法，離線可跑。
 - **標點與符號不產生 Word**。`qwen-asr` 的 `clean_token` 只保留 Unicode 字母、數字與 `'`，其餘字元在送入模型前即被剝除，故 `words` 的數量不等於 `Content` 的字元數。T3 的合理性檢查不可以「兩者相等」為判準，否則每段都會被誤判為對齊失敗。
+- **單字時長異常確有發生，T3 的合理性檢查不可省**。#26 以官方測試音訊實測（4.204 秒、13 字）即出現一例：「幾」的 `Start` 與 `End` 相同（零時長），且與下一字「乎」之間有 0.16 秒間隙——「幾乎」為連讀詞，該處不應有停頓。此異常出現在 `qwen-asr` 的 `fix_timestamp` **之後**：該函式以最長遞增子序列修正時間戳的單調性，不修對齊正確性。整體對齊仍可用（其餘字時長 0.16–0.40 秒，符合中文語速），但零時長與虛假間隙是 T3 必須攔下的兩種型態。
 - **服務須無狀態**。測試區不實作併發（無跨請求佇列、worker 池），但 prod 確定為多併發架構，故不得使用全域可變狀態或假設獨佔 GPU，屆時加 replica 或補 batch queue 即可，不必重寫。prod 的 VRAM 餘裕會被併發吃掉，需另行重算。
 - 連動 ADR-0003：消費端契約擴充 `words`、對齊狀態與四個彙總數字。
 - 連動 `CONTEXT.md`：Segment 定義修正（非語句單位），新增 Word、Forced alignment、對齊狀態三個詞條。

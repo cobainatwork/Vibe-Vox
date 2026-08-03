@@ -32,7 +32,11 @@ class Aligner(Protocol):
         texts: list[str],
         languages: list[str],
     ) -> list[list[Word]]:
-        """對齊一批（音訊, 文字），回每筆的字級時間戳，順序與輸入一一對應。"""
+        """對齊一批（音訊, 文字），回每筆的字級時間戳，順序與輸入一一對應。
+
+        languages 保留在此是因為模型 API 需要它，儘管 HTTP 層恆傳 Chinese
+        （不開放呼叫端指定，見 main.py 的 _LANGUAGE）。
+        """
         ...
 
 

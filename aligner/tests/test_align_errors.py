@@ -74,6 +74,22 @@ def test_rejects_batch_over_item_limit() -> None:
     assert resp.json()["error"]["code"] == "BATCH_TOO_LARGE"
 
 
+def test_batch_limit_is_checked_before_reading_files() -> None:
+    """段數上限存在的目的就是別把大請求收進記憶體，故須在讀檔前擋。
+
+    段數與數量不符兩個問題同時存在時回 BATCH_TOO_LARGE 而非 BATCH_SIZE_MISMATCH，
+    即證明前者的判斷發生在讀檔（與配對）之前。
+    """
+    resp = _client(max_batch_items=2).post(
+        "/align",
+        data={"items": json.dumps([{"text": "甲"}, {"text": "乙"}])},
+        files=[_wav_file(name=f"seg{i}.wav") for i in range(5)],
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "BATCH_TOO_LARGE"
+
+
 def test_rejects_undecodable_audio() -> None:
     resp = _client().post(
         "/align",
