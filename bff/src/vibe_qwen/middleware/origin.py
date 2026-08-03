@@ -22,7 +22,7 @@ class OriginGuardMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if request.method not in _SAFE_METHODS:
             origin = self._request_origin(request)
-            if origin is not None and origin not in self._allowed:
+            if origin is not None and not self._is_allowed(origin, request):
                 return JSONResponse(
                     status_code=403,
                     content={
@@ -33,6 +33,14 @@ class OriginGuardMiddleware(BaseHTTPMiddleware):
                     },
                 )
         return await call_next(request)
+
+    def _is_allowed(self, origin: str, request: Request) -> bool:
+        if origin in self._allowed:
+            return True
+        # 同源（前端與 API 經同一 host:port，nginx 以 Host $host 保留）非 CSRF，放行——
+        # 支援動態 IP 部署零設定；第三方（Origin ≠ Host）仍被擋。
+        host = request.headers.get("host")
+        return bool(host and urlsplit(origin).netloc == host)
 
     @staticmethod
     def _request_origin(request: Request) -> str | None:

@@ -43,6 +43,14 @@ def test_state_change_without_origin_headers_passes_gate():
     assert resp.status_code == 404
 
 
+def test_same_origin_state_change_passes_gate():
+    # 前端與 API 同源（經 nginx 同一 host:port，Origin == Host）非 CSRF，須放行；
+    # 支援動態 IP 部署（http://<IP>:8088）零設定，Origin 不必在固定白名單內。
+    resp = _client().post(PROBE, headers={"Origin": "http://testserver"})
+
+    assert resp.status_code == 404  # 通過 Origin 閘門後因哨兵路徑無路由而 404
+
+
 def test_safe_method_from_foreign_origin_is_not_blocked():
     # 安全方法（GET）不做 Origin 檢查：健康檢查仍回 200。
     resp = _client().get("/api/health", headers={"Origin": "http://evil.example"})
