@@ -51,7 +51,7 @@ class Settings:
     )
     # 音檔上傳單檔上限（bytes）；超過回 413 語意。25 MiB 對齊常見 ASR 上傳量級。
     audio_max_bytes: int = field(
-        default_factory=_env("VIBE_QWEN_AUDIO_MAX_BYTES", "26214400", int)
+        default_factory=_env("VIBE_QWEN_AUDIO_MAX_BYTES", "209715200", int)
     )
     # ASR 目標取樣率預設（provisional）；正確值於 #5 接 VibeVoice-ASR 時確認。
     # transcode_to_wav 的 sample_rate 為必填參數，模組本身不硬編此值。
