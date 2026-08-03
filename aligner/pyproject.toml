@@ -6,6 +6,9 @@ requires-python = ">=3.12"
 # torch 與 qwen-asr 刻意不在此宣告：兩者僅存在於 aligner image（見
 # docker/aligner.Dockerfile），由 QwenAligner 於 load() 內延遲 import。
 # 如此本服務的測試不需 GPU 即可在 CI 執行，lock 檔亦不必解析 CUDA wheel。
+# numpy 的下界刻意保持寬鬆：aligner image 內已有 base image 帶的 numpy，而該版本
+# 與 torch 編譯時綁定的 ABI 相符。下界若提高到系統版之上，pip 會裝新版進 venv 遮蔽
+# 系統版，可能撞 torch 的 numpy ABI。本服務只用 numpy 做波形陣列，任何 2.x 都夠。
 dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.30",

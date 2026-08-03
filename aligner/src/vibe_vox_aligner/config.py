@@ -16,10 +16,14 @@ def _env(name: str, default: str, cast: Callable[[str], T]) -> Callable[[], T]:
 @dataclass(frozen=True)
 class Settings:
     # 權重已 bake 進 image（docker/aligner.Dockerfile），runtime 命中 HF 快取不下載。
+    # 改此值會讓 runtime 嘗試連網抓新模型——image 內只有預設那一個，離線即失敗。
+    # 要換模型須同步改 Dockerfile 的 snapshot_download。
     model_id: str = field(
         default_factory=_env("VIBE_VOX_ALIGNER_MODEL", "Qwen/Qwen3-ForcedAligner-0.6B", str)
     )
-    # device_map 值；compose 只掛一張卡，故容器內恆為 cuda:0。
+    # device_map 值。正式部署為 cuda:0（compose 只掛一張卡），但設為 cpu 即可在無
+    # GPU 的機器上跑完整推論——本模型僅 0.6B 且解碼為單次 NAR forward，CPU 跑得動，
+    # 開發機的端到端驗證即靠此（見 aligner/README.md 的驗證狀態）。
     device: str = field(default_factory=_env("VIBE_VOX_ALIGNER_DEVICE", "cuda:0", str))
     # 單筆音訊秒數上限。取 qwen-asr 的 MAX_FORCE_ALIGN_INPUT_SECONDS（inference/utils.py）
     # 之 180，而非 model card 宣稱的 5 分鐘——該常數是套件作者對序列長度上限

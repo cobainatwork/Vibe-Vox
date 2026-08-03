@@ -86,44 +86,49 @@ uv run pytest
 
 測試不需 GPU：`torch` 與 `qwen-asr` 只存在於 aligner image，由 `QwenAligner.load()` 延遲 import，測試以假對齊器注入 `create_app`。真實推論只能在有 GPU 的機器驗證。
 
-## 待遠端驗證
+## 驗證狀態
 
-issue #26 的四項驗收都需要 GPU，開發機（Windows）無法執行。在遠端機（RTX 6000 Ada 48GB）依序做：
+開發機無 GPU 仍可做端到端驗證：設 `VIBE_VOX_ALIGNER_DEVICE=cpu`。本模型只有 0.6B 且解碼為單次 NAR forward，CPU 上跑得動，故不需要卡就能驗整條推論路徑。
 
-**1. image build**
+| 項目 | 結果 |
+|---|---|
+| image build | 通過。torch 2.11.0+cu128、權重 1.8 GB 已 bake 進 `/models` |
+| 無 GPU 時的降級 | 載入拋 `Found no NVIDIA driver` 被捕捉，服務照常起（`restarts=0`），`/health` 回 503 `{"ready": false}` |
+| CPU 模式就緒 | `/health` 回 200 `{"ready": true}` |
+| 真實對齊 | 官方測試音訊（4.204 秒 @ 16 kHz）配繁體文字「甚至出現交易幾乎停滯的情況。」→ 13 個 Word，字序相符、`start` 單調遞增、末字 `end` 3.68 未超出音訊長度 |
+| batch 路徑 | 兩段一次送（文字分別為全句與前半句），順序對應且 Word 數各自獨立（13 與 6），padding 不互相污染 |
 
-```bash
-docker compose build aligner   # 權重約 1.2 GB，首次 build 會下載
-```
+送繁體文字對簡體發音的音訊仍正確對齊：模型的 CJK 逐字判定不受字形影響，故 BFF 送繁體逐字稿沒問題。
 
-**2. 容器啟動後健康檢查回報就緒**
-
-```bash
-docker compose up -d aligner
-docker compose ps aligner      # 等 healthy；start-period 為 300 秒
-```
-
-**3. 送已知音訊與文字，回得出字級時間戳**
+重現方式：
 
 ```bash
-docker compose exec aligner curl -s -X POST http://127.0.0.1:9100/align \
-  -F 'items=[{"text":"甚至出現交易幾乎停滯的情況"}]' \
-  -F "audio=@seg0.wav"
+docker build -f docker/aligner.Dockerfile -t vibe-vox-aligner:local .
+docker run -d --name aligner-cpu -p 9100:9100 \
+  -e VIBE_VOX_ALIGNER_DEVICE=cpu vibe-vox-aligner:local
+# 等 /health 回 200（CPU 載入約需一分鐘）
+curl -X POST http://localhost:9100/align \
+  -F 'items=[{"text":"甚至出現交易幾乎停滯的情況。"}]' \
+  -F "audio=@asr_zh.wav"
 ```
 
-逐字檢查三件事：Word 數等於文字中的漢字數（**標點不計**）、時間戳單調遞增、末字 `end` 不超過音訊長度。
+測試音訊取自官方 model card：`https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-ASR-Repo/asr_zh.wav`
 
-**4. 實測單段 VRAM 峰值，取代 ADR-0004 的 3–4 GB 估算值**
+## 仍待 GPU 驗證
 
-在宿主上於對齊前後各讀一次：
+issue #26 只剩兩項驗收未完成，都是 GPU 專屬。在遠端機（RTX 6000 Ada 48GB）做：
+
+**1. 單段 VRAM 峰值**，取代 ADR-0004 的 3–4 GB 估算值。在宿主上於對齊前後各讀一次：
 
 ```bash
 nvidia-smi --query-compute-apps=pid,used_memory --format=csv
 ```
 
-看的是整個 process 的 VRAM（含 CUDA context 與 allocator 快取），這正是與 vllm、tts 共用單卡時該關心的數字。分別量單段與 8／16／32 段，據此校準 `VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS`——目前的 32 無實測依據。
+看的是整個 process 的 VRAM（含 CUDA context 與 allocator 快取），這正是與 vllm、tts 共用單卡時該關心的數字。**不要**在容器內另開 process 讀 `torch.cuda.max_memory_allocated()`——那是 per-process 的，讀不到 uvicorn 那個行程的值。
 
-**5. 與 vllm、tts 同時啟動不 OOM**
+分別量單段與 8／16／32 段，據此校準 `VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS`——目前的 32 無實測依據。
+
+**2. 與 vllm、tts 同時啟動不 OOM**
 
 ```bash
 docker compose --profile tts up -d

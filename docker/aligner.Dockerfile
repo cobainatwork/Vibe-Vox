@@ -16,22 +16,39 @@ ENV PYTORCH_ALLOC_CONF=expandable_segments:True
 
 # 系統音訊依賴，對齊官方 docker/Dockerfile-qwen3-asr-cu128：libsndfile 供 soundfile，
 # ffmpeg 供 librosa 的後備解碼路徑。
+# python3.12-venv：Debian 把 venv 的 ensurepip 拆成獨立套件，base image 未裝，
+# 缺它 `python -m venv` 會失敗。版本號可硬編是因為 base image tag 已釘死，
+# 其 Python 版本隨之固定；換 base image 時需同步改此處。
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libsndfile1 ffmpeg \
+    && apt-get install -y --no-install-recommends libsndfile1 ffmpeg python3.12-venv \
     && rm -rf /var/lib/apt/lists/*
+
+# base image 的 Python 是 Debian 系統 Python，帶 PEP 668 的 EXTERNALLY-MANAGED
+# 標記，pip 不得直接寫入（舊版 pytorch image 走 conda，無此限制）。改建 venv：
+# --system-site-packages 讓它沿用 image 內既有的 torch，不必重裝 2 GB 級的 CUDA
+# wheel；且在 venv 內安裝會遮蔽系統套件而非嘗試移除，順帶避開官方 Dockerfile
+# 用 `apt remove python3-blinker` 處理的那個 flask 依賴衝突。
+# venv 上 PATH 的做法與 bff/Dockerfile 一致。
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+RUN python -m venv --system-site-packages "$VIRTUAL_ENV"
 
 # 官方 qwen-asr 套件。版本釘死以保 build 可重現——它自身亦釘死 transformers==4.57.6。
 # 不裝 [vllm] extra：本服務走 transformers backend（ADR-0004），且 qwen-asr-serve
 # 只是 vLLM serve 的包裝，不提供對齊端點。
 RUN pip install --no-cache-dir qwen-asr==0.0.6
 
+# build 時就確認 venv 看得到 base image 的 torch 且 CUDA 版本如預期。
+# 這條若失敗，代表 --system-site-packages 沒生效——在此中斷遠優於 runtime 才發現。
+RUN python -c "import torch, qwen_asr; print('torch', torch.__version__, 'cuda', torch.version.cuda)"
+
 # 權重 build 時下載進 image（開箱即用、runtime 零下載），與 vllm image 同做法。
 # 選非 -hf 變體：-hf 走 transformers 的 AutoModelForTokenClassification，但在官方
 # Transformers release 納入前需 `pip install git+https://github.com/huggingface/transformers`，
 # 版本釘不住、build 不可重現（VibeVoice 的 -HF 變體亦曾在此類問題上踩坑）。
 # qwen-asr 這條是官方 model card 的首選範例，且支援 batch 與 (np.ndarray, sr) 輸入。
-ARG HF_TOKEN=""
-ENV HF_TOKEN=${HF_TOKEN}
+# 不設 HF_TOKEN（vllm image 需要它是因為 VibeVoice-ASR 可能為 gated model）：
+# 本模型為公開的 Apache-2.0，無需認證，且 ENV 會把 token 烙進 image 層。
 RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-ForcedAligner-0.6B')"
 
 # 本服務以 pip 而非 uv 安裝：torch 由 base image 提供，用 uv sync 依 lock 重建環境
@@ -42,7 +59,11 @@ COPY aligner/src ./src
 RUN pip install --no-cache-dir .
 
 # 不切非 root：與 vllm 容器一致，且 HF_HOME 下的權重層若 chown 會整份複製一次。
-# 該容器不對外，僅在 compose 內部網路供 BFF 呼叫。
+# 代價要講清楚：本服務以 libsndfile 解碼外部來源的音訊（使用者上傳、經 BFF 轉碼），
+# 而 libsndfile 有緩衝區溢位的 CVE 史，以 root 執行等於把該類漏洞的後果放大到 root。
+# 目前的緩解是該容器不對外（僅 compose 內部網路供 BFF 呼叫）且輸入已先經 ffmpeg
+# 正規化。若要收斂此風險，做法是建非 root 使用者並以其身分執行 snapshot_download
+# （避免 chown 整層權重），需重新 build 驗證。
 
 EXPOSE 9100
 # start-period 需涵蓋權重載入至 GPU 的時間；未就緒時 /health 回 503，urlopen 拋錯
