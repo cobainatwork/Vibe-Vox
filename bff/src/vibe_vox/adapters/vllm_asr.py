@@ -30,14 +30,27 @@ class AsrTimeout(Exception):
     """遠端 ASR 呼叫逾時（端點層映射 → 504）。"""
 
 
+_SHOW_KEYS = "Start time, End time, Speaker ID, Content"
+
+
 def _instruction(duration: float, context: str) -> str:
-    """官方 prompt：要求輸出四個 key，附音檔秒數；context 併於背景資訊區。"""
-    base = (
-        f"This is a {duration:.2f} seconds audio, please transcribe it "
-        "with these keys: Start, End, Speaker, Content"
-    )
+    """官方 prompt：欄位描述與 hotword 措辭皆對齊訓練格式。
+
+    權威來源為 processor（vibevoice/processor/vibevoice_asr_processor.py 的
+    `# Build token sequence following training format`）——LoRA 微調腳本即以它組
+    輸入，故模型只在訓練中看過這組措辭。注意欄位描述（Start time…）與模型輸出的
+    JSON key（Start…）本就不同，官方刻意如此。
+    """
     if context:
-        base += "\n\nContext information (hotwords, speaker names, etc.):\n" + context
+        base = (
+            f"This is a {duration:.2f} seconds audio, with extra info: {context}\n\n"
+            f"Please transcribe it with these keys: {_SHOW_KEYS}"
+        )
+    else:
+        base = (
+            f"This is a {duration:.2f} seconds audio, please transcribe it "
+            f"with these keys: {_SHOW_KEYS}"
+        )
     base += (
         "\nImportant: You must output the transcription strictly in "
         "Traditional Chinese (繁體中文)."
@@ -77,6 +90,16 @@ def _as_float(value: Any) -> float:
         return 0.0
 
 
+def _first_value(seg: dict, *keys: str, default: Any = None) -> Any:
+    """取第一個有值的 key。模型有時拿 prompt 的欄位描述（Start time…）當 JSON key，
+    官方 gradio demo 亦做同樣的三重相容；否則時間戳會靜默變 0。"""
+    for key in keys:
+        value = seg.get(key)
+        if value is not None:
+            return value
+    return default
+
+
 def _parse(content: str) -> TranscriptionResult:
     """防禦性解析模型輸出：非 JSON 或缺欄位皆不崩潰，退回純文字。
 
@@ -101,10 +124,14 @@ def _parse(content: str) -> TranscriptionResult:
             continue
         segments.append(
             Segment(
-                Start=_as_float(s.get("Start")),
-                End=_as_float(s.get("End")),
-                Speaker=to_traditional(str(s.get("Speaker", ""))),
-                Content=to_traditional(str(s.get("Content", ""))),
+                Start=_as_float(_first_value(s, "Start", "start", "Start time")),
+                End=_as_float(_first_value(s, "End", "end", "End time")),
+                Speaker=to_traditional(
+                    str(_first_value(s, "Speaker", "speaker", "Speaker ID", default=""))
+                ),
+                Content=to_traditional(
+                    str(_first_value(s, "Content", "content", "text", default=""))
+                ),
             )
         )
 

@@ -25,6 +25,42 @@ def _reply(content: str) -> httpx.Response:
     )
 
 
+def _captured_prompt(tmp_path, *, context: str) -> str:
+    """跑一次 transcribe，取出送給模型的 prompt 文字。"""
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        parts = json.loads(request.content)["messages"][-1]["content"]
+        captured["text"] = next(p for p in parts if p.get("type") == "text")["text"]
+        return _reply("{}")
+
+    client = VllmAsrClient(
+        "http://vllm:8000", "m", transport=httpx.MockTransport(handler)
+    )
+    asyncio.run(client.transcribe(_wav(tmp_path), context=context))
+    return captured["text"]
+
+
+def test_prompt_field_labels_match_training_format(tmp_path):
+    # 欄位描述須用 processor 訓練時的 show_keys（Start time/End time/Speaker ID），
+    # 非 gradio demo 誤植的輸出 key 名。模型只在訓練中看過前者。
+    text = _captured_prompt(tmp_path, context="")
+
+    assert "these keys: Start time, End time, Speaker ID, Content" in text
+
+
+def test_prompt_embeds_hotwords_with_training_phrasing(tmp_path):
+    # hotword 須以訓練措辭 "with extra info:" 接在秒數之後，而非另起
+    # "Context information" 區塊——後者不在模型的訓練分布內。
+    text = _captured_prompt(tmp_path, context="台積電")
+
+    assert text.startswith(
+        "This is a 1.00 seconds audio, with extra info: 台積電\n\n"
+        "Please transcribe it with these keys: Start time, End time, Speaker ID, Content"
+    )
+    assert "Context information" not in text
+
+
 def test_transcribe_builds_request_and_parses_segments(tmp_path):
     captured = {}
 
@@ -55,7 +91,7 @@ def test_transcribe_builds_request_and_parses_segments(tmp_path):
     audio = next(p for p in parts if p.get("type") == "audio_url")
     assert audio["audio_url"]["url"].startswith("data:audio/wav;base64,")  # data URL
     text = next(p for p in parts if p.get("type") == "text")["text"]
-    assert "Start, End, Speaker, Content" in text  # 官方 prompt 要求輸出四個 key
+    assert "Start time, End time, Speaker ID, Content" in text  # 訓練格式的欄位描述
     assert "台積電" in text  # Hotword context 併入
     assert "繁體中文" in text  # 強制輸出繁體
 
@@ -63,6 +99,27 @@ def test_transcribe_builds_request_and_parses_segments(tmp_path):
     assert result.segments[0].Speaker == "A"
     assert result.segments[0].Content == "你好"
     assert result.transcription_only == "你好"
+
+
+def test_parse_accepts_training_key_variants(tmp_path):
+    # 模型有時直接拿 prompt 的欄位描述當 JSON key（官方 gradio demo 亦做三重相容）。
+    # 無 fallback 時 Start/End 會靜默變 0.0——時間戳全毀卻不報錯。
+    payload = json.dumps(
+        {
+            "segments": [
+                {"Start time": 1.5, "End time": 3.0, "Speaker ID": 2, "Content": "測試"}
+            ]
+        },
+        ensure_ascii=False,
+    )
+    client = VllmAsrClient(
+        "http://vllm:8000", "m", transport=httpx.MockTransport(lambda r: _reply(payload))
+    )
+    result = asyncio.run(client.transcribe(_wav(tmp_path), context=""))
+
+    assert result.segments[0].Start == 1.5
+    assert result.segments[0].End == 3.0
+    assert result.segments[0].Speaker == "2"
 
 
 def test_transcribe_converts_simplified_content_to_traditional(tmp_path):
