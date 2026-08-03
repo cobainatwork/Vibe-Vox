@@ -14,8 +14,6 @@ services:
     depends_on:
       vllm:
         condition: service_started
-      tts:
-        condition: service_started
     networks:
       - vibe
     restart: unless-stopped
@@ -51,6 +49,8 @@ services:
 
   tts:
     # Qwen3-TTS 獨立服務程序（映像與實作待 spike 定案）。
+    # 尚未實作：置於 tts profile，預設不啟動；ASR 測試不需它（bff 的 tts_client 為 stub）。
+    profiles: ["tts"]
     image: ${VIBE_QWEN_TTS_IMAGE:-PLACEHOLDER_QWEN3_TTS_IMAGE}
     networks:
       - vibe
