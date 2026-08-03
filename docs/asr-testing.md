@@ -27,33 +27,29 @@ npm run dev
 
 ## B. 遠端 GPU 真實辨識（連真 vLLM）
 
-在能跑 `nvidia-smi` 的遠端 GPU 機上（測 #10 / #11 那台）。
+在能跑 `nvidia-smi` 的遠端 GPU 機上（測 #10 / #11 那台）。**零設定**：VibeVoice-ASR 權重與官方 vllm_plugin 已 bake 進 vllm image，不必填任何模型 id 或路徑。
 
 1. 拉 code：`git pull`（main）。
-2. 設定環境變數：
-   ```bash
-   cp .env.example .env
-   ```
-   編輯 `.env`，填入 `VIBE_QWEN_ASR_MODEL`＝VibeVoice-ASR 的模型 id（HuggingFace 路徑或掛載的本地路徑）。這是唯一必填項。
-3. 啟動（只起 ASR 相關；TTS 未做，已置於 profile 自動跳過，不會擋）：
+2. 啟動（首次 build vllm image：clone 官方 VibeVoice、裝 vllm plugin、把 `microsoft/VibeVoice-ASR-HF` 權重下載打包進 image，故首次較久；TTS 未做已置於 profile 自動跳過，日後要一起起才加 `--profile tts`）：
    ```bash
    docker compose up --build
    ```
-   （日後 TTS 做好、要一起起，才加 `--profile tts`。）
-4. 等 vllm 載入模型（首次會下載權重，較久），確認就緒：
+3. 等 vllm 起來（首次久、之後快），確認就緒：
    ```bash
-   docker compose logs -f vllm            # 看到模型載入完成
+   docker compose logs -f vllm            # 看到 vllm serve 就緒
    curl http://localhost/api/health       # 應回 {"data":{"asr":{"ready":true},...}}
    ```
-5. 瀏覽器開 `http://<遠端機 IP>`（正式版前端在 port 80）→「ASR 測試」分頁 → 上傳音檔 → 送出。
+4. 瀏覽器開 `http://<遠端機 IP>`（正式版前端在 port 80）→「ASR 測試」分頁 → 上傳音檔 → 送出。
 
 ## 測不通時，把這些給我 debug
 
-- `docker compose logs vllm`：vLLM 起不來、或不支援這個模型的 audio input。
-- `docker compose logs bff`：串接/解析錯誤。
-- 前端「原始」視圖顯示的辨識回傳內容：這是驗證 VibeVoice-ASR 實際輸出格式、對齊解析的關鍵。
+- `docker compose logs vllm`：vLLM / VibeVoice plugin 啟動問題。
+- `docker compose logs bff`：串接 / 解析錯誤。
+- 前端「原始」視圖顯示的辨識回傳內容：驗證輸出格式、對齊解析的關鍵。
 
-## 待遠端驗證的關鍵未知（測試目的）
+## 待遠端驗證（測試目的）
 
-1. **vLLM 能否 serve VibeVoice-ASR 並吃 audio input**（chat completions 的 `input_audio`）。若不支援，需改 serving 方式（非 vLLM 或不同端點）。
-2. **模型實際輸出的 JSON 格式** vs 現行解析假設（`bff/src/vibe_qwen/adapters/vllm_asr.py` 的 `_parse` 假設「含 segments 的物件」）。不符則調 `_parse`——把「原始」視圖的實際輸出給我，我來對齊。
+vLLM 對 VibeVoice-ASR 的支援已確認（用官方 `vllm_plugin`）；client 請求格式（`audio_url` data URL、要求 Start/End/Speaker/Content 的 prompt、model=vibevoice）已對齊官方 demo。剩下真跑才能確認的：
+
+1. **模型實際輸出的 JSON 形狀** vs `_parse`（現吃「`{segments:[...]}`」或「直接 array」，欄位 Start/End/Speaker/Content）。若不符，把前端「原始」視圖的實際輸出給我，我對齊 `_parse`。
+2. **共卡記憶體**：TTS 未上線前 ASR 獨佔 GPU；TTS 上線時需調 `gpu_memory_utilization`（見 ADR-0001）。

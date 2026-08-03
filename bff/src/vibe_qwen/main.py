@@ -39,7 +39,9 @@ def _default_asr_client(settings: Settings) -> AsrClient:
     if settings.use_stub_models:
         return StubAsrClient(result=DEFAULT_STUB_ASR_RESULT)
     return VllmAsrClient(
-        settings.asr_base_url, settings.asr_model, timeout=settings.asr_timeout_seconds
+        settings.asr_base_url,
+        settings.asr_served_name,
+        timeout=settings.asr_timeout_seconds,
     )
 
 

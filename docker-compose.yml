@@ -9,7 +9,6 @@ services:
     environment:
       VIBE_QWEN_FRONTEND_ORIGINS: "http://localhost"
       VIBE_QWEN_ASR_BASE_URL: "http://vllm:8000"
-      VIBE_QWEN_ASR_MODEL: "${VIBE_QWEN_ASR_MODEL:-PLACEHOLDER_ASR_MODEL_ID}"
       VIBE_QWEN_TTS_BASE_URL: "http://tts:9000"
     depends_on:
       vllm:
@@ -30,12 +29,11 @@ services:
     restart: unless-stopped
 
   vllm:
-    # VibeVoice-ASR，經 vLLM 的 /v1/chat/completions 提供（ADR-0001）。
-    # gpu_memory_utilization 壓低以替 TTS 保留 VRAM，避免 OOM。
-    image: vllm/vllm-openai:latest
-    command: >
-      --model ${VIBE_QWEN_ASR_MODEL:-PLACEHOLDER_ASR_MODEL_ID}
-      --gpu-memory-utilization 0.55
+    # VibeVoice-ASR：官方 vllm_plugin + 權重 build 時 bake 進 image（開箱即用）。
+    # 見 docker/vllm.Dockerfile；serve 由官方 start_server.py 處理（served-model-name vibevoice）。
+    build:
+      context: .
+      dockerfile: docker/vllm.Dockerfile
     networks:
       - vibe
     restart: unless-stopped
