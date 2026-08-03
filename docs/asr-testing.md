@@ -30,7 +30,7 @@ npm run dev
 在能跑 `nvidia-smi` 的遠端 GPU 機上（測 #10 / #11 那台）。**零設定**：VibeVoice-ASR 權重與官方 vllm_plugin 已 bake 進 vllm image，不必填任何模型 id 或路徑。
 
 1. 拉 code：`git pull`（main）。
-2. 啟動（首次 build vllm image：clone 官方 VibeVoice、裝 vllm plugin、把 `microsoft/VibeVoice-ASR-HF` 權重下載打包進 image，故首次較久；TTS 未做已置於 profile 自動跳過，日後要一起起才加 `--profile tts`）：
+2. 啟動（首次 build vllm image：clone 官方 VibeVoice、裝 vllm plugin、把 `microsoft/VibeVoice-ASR` 權重下載打包進 image，故首次較久；TTS 未做已置於 profile 自動跳過，日後要一起起才加 `--profile tts`）：
    ```bash
    docker compose up --build
    ```
