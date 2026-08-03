@@ -1,4 +1,5 @@
-# Vibe-Vox 正式版編排：四部署單元，vLLM 與 TTS 共用單張 GPU。
+# Vibe-Vox 正式版編排：五部署單元，vLLM、aligner 與 TTS 共用單張 GPU
+# （ADR-0004：三模型常駐 RTX 6000 Ada 48GB）。
 # 注意：vllm 與 tts 的映像、模型 id 與服務層實作待 spec Further Notes 所述 spike
 # 定案（見 #2/#4）；此處以合理預設宣告部署拓撲，adapter 對接於對應票交付。
 
@@ -45,6 +46,19 @@ services:
             - driver: nvidia
               device_ids: ["0"]  # 釘選同一張卡，符 ADR-0001 共用單卡 VRAM 協調
               capabilities: [gpu]
+
+  aligner:
+    # 字級強制對齊（ADR-0004 的第四部署單元）：Qwen3-ForcedAligner-0.6B，
+    # transformers backend，與 vllm 容器完全隔離（不共用 image、不改其 Dockerfile）。
+    # 刻意不列入 bff 的 depends_on：aligner 不可用時 ASR 逐字稿仍須照常回傳，
+    # 硬依賴會讓這層降級失效。
+    build:
+      context: .
+      dockerfile: docker/aligner.Dockerfile
+    networks:
+      - vibe
+    restart: unless-stopped
+    deploy: *gpu_deploy
 
   tts:
     # Qwen3-TTS 獨立服務程序（映像與實作待 spike 定案）。
