@@ -1,0 +1,26 @@
+# 工具產生的本機工作區與暫存，不進版控。
+# 各語言子專案另有自己的 .gitignore（如 bff/.gitignore）。
+
+# 本機環境設定。.env.example 指示使用者 cp 為 .env 供 docker compose 讀取，
+# 該檔含部署位址等本機值，不得進版控；範本本身（.env.example）仍追蹤。
+.env
+.env.local
+
+# Claude Code：agent worktree 與本機工作區。
+# 註：目前僅含 worktrees/；日後若加入要共用的專案級設定（settings.json、
+# commands、skills），需改為選擇性忽略而非整個目錄。
+.claude/
+
+# Playwright MCP 的頁面快照
+.playwright-mcp/
+
+# 其他 agent 工具的本機產物
+.impeccable/
+.remember/
+.scratch/
+
+# Spike 實驗區。
+# 註：VoxCPM TTS 的 spike harness 在 spike/voxcpm-tts 分支（已 push origin），
+# 不在此目錄——本機這份是殘留。若日後有需要保留的 spike，請放到分支或
+# docs/ 底下，不要期待此目錄進版控。
+spikes/
