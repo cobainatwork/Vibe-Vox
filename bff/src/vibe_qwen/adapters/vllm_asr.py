@@ -1,16 +1,18 @@
-"""真模型串接：VllmAsrClient 經 vLLM 的 OpenAI 相容 chat completions 呼叫 VibeVoice-ASR。
+"""真模型串接：VllmAsrClient 經官方 vLLM plugin serve 的 VibeVoice-ASR。
 
-音檔以 base64 `input_audio` content part 傳入（vLLM 多模態格式），context 併入
-文字指示。回傳的 Who/When/What 由 message.content 解析。
+契約對齊 microsoft/VibeVoice 官方 vllm_plugin（scripts/gradio_asr_demo_api_video.py）：
+- 端點 /v1/chat/completions；音檔以 `audio_url` 的 data URL 傳入（非 input_audio）。
+- prompt 明確要求輸出 Start/End/Speaker/Content 四個 key，並附音檔秒數；
+  hotword/context 接在 "Context information (...)" 之後。
+- serve 端 `--served-model-name vibevoice`，故 client 的 model 參數用該 served name。
+- 回傳為含 Start/End/Speaker/Content 的結構化 segments（dict 的 segments 或直接 array）。
 
-VibeVoice-ASR 的確切輸出 shape 屬模型特定、未於無環境下驗證：`_parse` 以「含
-segments 的 JSON 物件」為假設，對非 JSON／缺欄位防禦性 fallback（不 500）。信封層
-異常（choices 缺失、content 非字串）視為上游不可用 → AsrUnavailable。遠端連線屬
-環境相依，測試以 httpx MockTransport 注入假回應。
+遠端連線屬環境相依，測試以 httpx MockTransport 注入假回應。
 """
 
 import base64
 import json
+import wave
 from pathlib import Path
 from typing import Any
 
@@ -27,11 +29,24 @@ class AsrTimeout(Exception):
     """遠端 ASR 呼叫逾時（端點層映射 → 504）。"""
 
 
-_BASE_INSTRUCTION = "請辨識這段音訊，輸出帶語者與時間戳的分段結果。"
+def _instruction(duration: float, context: str) -> str:
+    """官方 prompt：要求輸出四個 key，附音檔秒數；context 併於背景資訊區。"""
+    base = (
+        f"This is a {duration:.2f} seconds audio, please transcribe it "
+        "with these keys: Start, End, Speaker, Content"
+    )
+    if context:
+        base += "\n\nContext information (hotwords, speaker names, etc.):\n" + context
+    return base
 
 
-def _instruction(context: str) -> str:
-    return f"{_BASE_INSTRUCTION}\n\n參考詞彙：{context}" if context else _BASE_INSTRUCTION
+def _wav_duration(path: Path) -> float:
+    try:
+        with wave.open(str(path), "rb") as w:
+            rate = w.getframerate()
+            return w.getnframes() / float(rate) if rate else 0.0
+    except (wave.Error, OSError, ValueError):
+        return 0.0
 
 
 def _extract_content(data: Any) -> str:
@@ -55,27 +70,33 @@ def _as_float(value: Any) -> float:
 def _parse(content: str) -> TranscriptionResult:
     """防禦性解析模型輸出：非 JSON 或缺欄位皆不崩潰，退回純文字。
 
-    transcription_only 的串接方式（此處以空字串連接）依賴模型輸出的分段語意，
-    真實環境接上 VibeVoice-ASR 後再對齊。
+    官方輸出為含 Start/End/Speaker/Content 的 segments，可能是 `{segments:[...]}`
+    或直接的 array，兩者都接。
     """
     try:
         data = json.loads(content)
     except json.JSONDecodeError:
         data = None
 
-    segments: list[Segment] = []
     if isinstance(data, dict):
-        for s in data.get("segments", []):
-            if not isinstance(s, dict):
-                continue
-            segments.append(
-                Segment(
-                    Start=_as_float(s.get("Start")),
-                    End=_as_float(s.get("End")),
-                    Speaker=str(s.get("Speaker", "")),
-                    Content=str(s.get("Content", "")),
-                )
+        raw_segments = data.get("segments", [])
+    elif isinstance(data, list):
+        raw_segments = data
+    else:
+        raw_segments = []
+
+    segments: list[Segment] = []
+    for s in raw_segments:
+        if not isinstance(s, dict):
+            continue
+        segments.append(
+            Segment(
+                Start=_as_float(s.get("Start")),
+                End=_as_float(s.get("End")),
+                Speaker=str(s.get("Speaker", "")),
+                Content=str(s.get("Content", "")),
             )
+        )
 
     return TranscriptionResult(
         segments=segments,
@@ -89,13 +110,13 @@ class VllmAsrClient:
     def __init__(
         self,
         base_url: str,
-        model: str,
+        served_model_name: str,
         *,
         timeout: float = 120.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._base_url = base_url
-        self._model = model
+        self._model = served_model_name
         self._timeout = timeout
         self._transport = transport
 
@@ -114,17 +135,16 @@ class VllmAsrClient:
 
     async def transcribe(self, audio: Path, *, context: str) -> TranscriptionResult:
         audio_b64 = base64.b64encode(audio.read_bytes()).decode("ascii")
+        data_url = f"data:audio/wav;base64,{audio_b64}"
+        prompt = _instruction(_wav_duration(audio), context)
         payload = {
             "model": self._model,
             "messages": [
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": _instruction(context)},
-                        {
-                            "type": "input_audio",
-                            "input_audio": {"data": audio_b64, "format": "wav"},
-                        },
+                        {"type": "audio_url", "audio_url": {"url": data_url}},
+                        {"type": "text", "text": prompt},
                     ],
                 }
             ],

@@ -62,9 +62,10 @@ class Settings:
     asr_base_url: str = field(
         default_factory=_env("VIBE_QWEN_ASR_BASE_URL", "http://vllm:8000", str)
     )
-    # vLLM serve 的 ASR 模型 ID（chat completions 的 model 參數）；對齊 compose。
-    asr_model: str = field(
-        default_factory=_env("VIBE_QWEN_ASR_MODEL", "PLACEHOLDER_ASR_MODEL_ID", str)
+    # vLLM 的 --served-model-name；client 呼叫時的 model 參數用它（官方預設 vibevoice）。
+    # 模型權重已 bake 進 vllm image（docker/vllm.Dockerfile），無需在此指定模型路徑。
+    asr_served_name: str = field(
+        default_factory=_env("VIBE_QWEN_ASR_SERVED_NAME", "vibevoice", str)
     )
     # 呼叫遠端 ASR 的逾時（秒）：涵蓋網路 + 模型推論，較 ffmpeg 寬。
     asr_timeout_seconds: float = field(

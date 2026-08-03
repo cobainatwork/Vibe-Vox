@@ -47,10 +47,11 @@ def test_transcribe_builds_request_and_parses_segments(tmp_path):
     body = json.loads(req.content)
     assert body["model"] == "vibevoice-asr"
     parts = body["messages"][-1]["content"]
-    assert any(p.get("type") == "input_audio" for p in parts)  # base64 音檔在其中
-    assert any(
-        p.get("type") == "text" and "台積電" in p.get("text", "") for p in parts
-    )  # Hotword context 併入指示
+    audio = next(p for p in parts if p.get("type") == "audio_url")
+    assert audio["audio_url"]["url"].startswith("data:audio/wav;base64,")  # data URL
+    text = next(p for p in parts if p.get("type") == "text")["text"]
+    assert "Start, End, Speaker, Content" in text  # 官方 prompt 要求輸出四個 key
+    assert "台積電" in text  # Hotword context 併入
 
     assert len(result.segments) == 1
     assert result.segments[0].Speaker == "A"
