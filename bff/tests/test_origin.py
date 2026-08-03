@@ -14,7 +14,9 @@ PROBE = "/api/__origin_probe__"
 
 
 def _client() -> TestClient:
-    return TestClient(create_app(settings=Settings(allowed_origins=[FRONTEND])))
+    return TestClient(
+        create_app(settings=Settings(allowed_origins=[FRONTEND], use_stub_models=True))
+    )
 
 
 def test_state_change_from_foreign_origin_is_rejected_403():

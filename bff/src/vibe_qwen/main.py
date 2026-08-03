@@ -8,10 +8,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
 from vibe_qwen.adapters.base import AsrClient, TtsClient
-from vibe_qwen.adapters.stub import StubAsrClient, StubTtsClient
+from vibe_qwen.adapters.stub import (
+    DEFAULT_STUB_ASR_RESULT,
+    StubAsrClient,
+    StubTtsClient,
+)
+from vibe_qwen.adapters.vllm_asr import AsrTimeout, AsrUnavailable, VllmAsrClient
 from vibe_qwen.api.admin_hotwords import router as admin_hotwords_router
+from vibe_qwen.api.asr import InvalidExtraTerms, router as asr_router
 from vibe_qwen.api.health import router as health_router
 from vibe_qwen.api.hotwords import router as hotwords_router
+from vibe_qwen.audio.errors import (
+    FileTooLarge,
+    TranscodeError,
+    TranscodeTimeout,
+    UnsupportedAudioFormat,
+)
+from vibe_qwen.audio.intake import AudioIntake
 from vibe_qwen.config import Settings
 from vibe_qwen.files.cleanup import cleanup_expired_temp_files
 from vibe_qwen.hotword_io import ImportLimitExceeded, ImportParseError
@@ -21,10 +34,20 @@ from vibe_qwen.middleware.origin import OriginGuardMiddleware
 from vibe_qwen.persistence.hotwords import HotwordNotFound, HotwordRepository
 
 
+def _default_asr_client(settings: Settings) -> AsrClient:
+    """dev（無 GPU）用 stub 回假結果；否則接遠端 vLLM。"""
+    if settings.use_stub_models:
+        return StubAsrClient(result=DEFAULT_STUB_ASR_RESULT)
+    return VllmAsrClient(
+        settings.asr_base_url, settings.asr_model, timeout=settings.asr_timeout_seconds
+    )
+
+
 def create_app(
     asr_client: AsrClient | None = None,
     tts_client: TtsClient | None = None,
     settings: Settings | None = None,
+    audio_intake: AudioIntake | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
 
@@ -35,8 +58,13 @@ def create_app(
 
     app = FastAPI(title="Vibe-Qwen BFF", lifespan=lifespan)
     app.state.settings = settings
-    app.state.asr_client = asr_client or StubAsrClient()
+    app.state.asr_client = asr_client or _default_asr_client(settings)
     app.state.tts_client = tts_client or StubTtsClient()
+    app.state.audio_intake = audio_intake or AudioIntake(
+        temp_dir=settings.temp_dir,
+        max_bytes=settings.audio_max_bytes,
+        timeout_seconds=settings.ffmpeg_timeout_seconds,
+    )
     app.state.hotwords = HotwordRepository(settings.db_path)
     app.state.heavy_guard = HeavyRequestGuard(
         max_concurrent=settings.max_concurrent_heavy_requests,
@@ -110,6 +138,43 @@ def create_app(
 
     app.add_exception_handler(RequestValidationError, _on_validation_error)
 
+    # 端點層例外 → 統一 HTTP 信封（#4 音檔模組例外、ASR extra_terms 驗證）。
+    def _error_handler(status: int, code: str, message: str):
+        async def handler(request, exc) -> JSONResponse:
+            return JSONResponse(
+                status_code=status,
+                content={"error": {"code": code, "message": message}},
+            )
+
+        return handler
+
+    app.add_exception_handler(
+        FileTooLarge, _error_handler(413, "FILE_TOO_LARGE", "上傳音檔超過大小上限。")
+    )
+    app.add_exception_handler(
+        UnsupportedAudioFormat,
+        _error_handler(400, "UNSUPPORTED_AUDIO_FORMAT", "不支援的音檔格式。"),
+    )
+    app.add_exception_handler(
+        TranscodeError,
+        _error_handler(400, "TRANSCODE_ERROR", "音檔轉碼失敗，可能非有效音訊。"),
+    )
+    app.add_exception_handler(
+        TranscodeTimeout,
+        _error_handler(504, "TRANSCODE_TIMEOUT", "音檔轉碼逾時。"),
+    )
+    app.add_exception_handler(
+        InvalidExtraTerms,
+        _error_handler(400, "INVALID_EXTRA_TERMS", "extra_terms 需為 JSON 字串陣列。"),
+    )
+    app.add_exception_handler(
+        AsrTimeout, _error_handler(504, "ASR_TIMEOUT", "語音辨識服務回應逾時。")
+    )
+    app.add_exception_handler(
+        AsrUnavailable,
+        _error_handler(502, "ASR_UNAVAILABLE", "語音辨識服務暫時無法使用。"),
+    )
+
     app.add_middleware(OriginGuardMiddleware, allowed_origins=settings.allowed_origins)
     app.add_middleware(
         CORSMiddleware,
@@ -120,4 +185,5 @@ def create_app(
     app.include_router(health_router)
     app.include_router(hotwords_router)
     app.include_router(admin_hotwords_router)
+    app.include_router(asr_router)
     return app

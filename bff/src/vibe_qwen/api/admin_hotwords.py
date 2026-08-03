@@ -13,7 +13,7 @@ from vibe_qwen.hotword_io import (
     to_csv,
     to_export_rows,
 )
-from vibe_qwen.hotword_text import ContextBudgetExceeded, compile_context, estimate_tokens
+from vibe_qwen.hotword_text import compile_context, enforce_context_budget
 from vibe_qwen.persistence.hotwords import HotwordNotFound
 
 router = APIRouter()
@@ -85,9 +85,7 @@ async def preview_context(request: Request) -> dict:
     repo = request.app.state.hotwords
     budget = request.app.state.settings.hotword_context_token_budget
     context = compile_context([h["term"] for h in repo.list_enabled()])
-    estimate = estimate_tokens(context)
-    if estimate > budget:
-        raise ContextBudgetExceeded(estimate, budget)
+    estimate = enforce_context_budget(context, budget)
     return {
         "data": {
             "context": context,

@@ -63,3 +63,11 @@ def estimate_tokens(text: str) -> int:
     cjk = sum(1 for ch in text if _is_cjk(ch))
     other = len(text) - cjk
     return cjk * 2 + (other + 2) // 3
+
+
+def enforce_context_budget(context: str, budget: int) -> int:
+    """context 估算超出預算即 raise ContextBudgetExceeded；否則回傳估算 token 數。"""
+    estimate = estimate_tokens(context)
+    if estimate > budget:
+        raise ContextBudgetExceeded(estimate, budget)
+    return estimate

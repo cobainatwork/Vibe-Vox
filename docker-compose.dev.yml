@@ -7,6 +7,7 @@ services:
       context: ./bff
     environment:
       VIBE_QWEN_FRONTEND_ORIGINS: "http://localhost:5173"
+      VIBE_QWEN_USE_STUB_MODELS: "true"
     ports:
       - "8000:8000"
     networks:

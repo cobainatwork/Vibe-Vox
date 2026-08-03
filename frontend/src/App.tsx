@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { AsrPanel } from "./AsrPanel";
 import { HotwordsPanel } from "./HotwordsPanel";
 import { fetchHealth } from "./api";
 import {
@@ -134,6 +135,8 @@ export function App() {
       <main className="app__main">
         {active === "hotwords" ? (
           <HotwordsPanel />
+        ) : active === "asr" ? (
+          <AsrPanel health={state.status === "ready" ? state.health : null} />
         ) : (
           <SectionPanel section={active} state={state} />
         )}

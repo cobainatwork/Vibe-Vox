@@ -9,7 +9,9 @@ FRONTEND = "http://localhost:5173"
 
 
 def _client() -> TestClient:
-    return TestClient(create_app(settings=Settings(allowed_origins=[FRONTEND])))
+    return TestClient(
+        create_app(settings=Settings(allowed_origins=[FRONTEND], use_stub_models=True))
+    )
 
 
 def _preflight(client: TestClient, origin: str):

@@ -9,6 +9,7 @@ services:
     environment:
       VIBE_QWEN_FRONTEND_ORIGINS: "http://localhost"
       VIBE_QWEN_ASR_BASE_URL: "http://vllm:8000"
+      VIBE_QWEN_ASR_MODEL: "${VIBE_QWEN_ASR_MODEL:-PLACEHOLDER_ASR_MODEL_ID}"
       VIBE_QWEN_TTS_BASE_URL: "http://tts:9000"
     depends_on:
       vllm:
