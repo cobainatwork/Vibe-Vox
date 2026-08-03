@@ -142,6 +142,9 @@ class VllmAsrClient:
         prompt = _instruction(_wav_duration(audio), context)
         payload = {
             "model": self._model,
+            # ASR 為確定性任務，需 greedy 解碼；不指定則 vLLM 用隨機取樣，
+            # 會在低信心片段吐出訓練語料的他語 token（俄/韓等亂碼）。
+            "temperature": 0,
             "messages": [
                 {
                     "role": "user",

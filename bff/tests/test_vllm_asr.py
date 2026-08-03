@@ -46,6 +46,7 @@ def test_transcribe_builds_request_and_parses_segments(tmp_path):
     assert req.url.path == "/v1/chat/completions"
     body = json.loads(req.content)
     assert body["model"] == "vibevoice-asr"
+    assert body["temperature"] == 0  # ASR 需 greedy 解碼，避免隨機取樣造成他語 hallucination
     parts = body["messages"][-1]["content"]
     audio = next(p for p in parts if p.get("type") == "audio_url")
     assert audio["audio_url"]["url"].startswith("data:audio/wav;base64,")  # data URL
