@@ -52,9 +52,15 @@ async def transcribe(
     context = compile_context(extra if replace_context else enabled + extra)
     enforce_context_budget(context, settings.hotword_context_token_budget)
 
-    async with intake.transcoded(
-        _stream(file), sample_rate=settings.asr_sample_rate
-    ) as wav:
-        result = await asr.transcribe(wav, context=context)
+    guard = request.app.state.heavy_guard
+    # guard 涵蓋轉碼 + 辨識，上限設為兩者之和，讓 client 端辨識逾時（→ 504 ASR_TIMEOUT）
+    # 先觸發，guard 為總體 backstop。
+    async with guard.slot(
+        timeout_seconds=settings.asr_timeout_seconds + settings.ffmpeg_timeout_seconds
+    ):
+        async with intake.transcoded(
+            _stream(file), sample_rate=settings.asr_sample_rate
+        ) as wav:
+            result = await asr.transcribe(wav, context=context)
 
     return result.model_dump() | {"applied_context": context}

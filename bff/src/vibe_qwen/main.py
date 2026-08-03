@@ -8,7 +8,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
 from vibe_qwen.adapters.base import AsrClient, TtsClient
-from vibe_qwen.adapters.stub import StubAsrClient, StubTtsClient
+from vibe_qwen.adapters.stub import (
+    DEFAULT_STUB_ASR_RESULT,
+    StubAsrClient,
+    StubTtsClient,
+)
+from vibe_qwen.adapters.vllm_asr import AsrTimeout, AsrUnavailable, VllmAsrClient
 from vibe_qwen.api.admin_hotwords import router as admin_hotwords_router
 from vibe_qwen.api.asr import InvalidExtraTerms, router as asr_router
 from vibe_qwen.api.health import router as health_router
@@ -29,6 +34,15 @@ from vibe_qwen.middleware.origin import OriginGuardMiddleware
 from vibe_qwen.persistence.hotwords import HotwordNotFound, HotwordRepository
 
 
+def _default_asr_client(settings: Settings) -> AsrClient:
+    """dev（無 GPU）用 stub 回假結果；否則接遠端 vLLM。"""
+    if settings.use_stub_models:
+        return StubAsrClient(result=DEFAULT_STUB_ASR_RESULT)
+    return VllmAsrClient(
+        settings.asr_base_url, settings.asr_model, timeout=settings.asr_timeout_seconds
+    )
+
+
 def create_app(
     asr_client: AsrClient | None = None,
     tts_client: TtsClient | None = None,
@@ -44,7 +58,7 @@ def create_app(
 
     app = FastAPI(title="Vibe-Qwen BFF", lifespan=lifespan)
     app.state.settings = settings
-    app.state.asr_client = asr_client or StubAsrClient()
+    app.state.asr_client = asr_client or _default_asr_client(settings)
     app.state.tts_client = tts_client or StubTtsClient()
     app.state.audio_intake = audio_intake or AudioIntake(
         temp_dir=settings.temp_dir,
@@ -152,6 +166,13 @@ def create_app(
     app.add_exception_handler(
         InvalidExtraTerms,
         _error_handler(400, "INVALID_EXTRA_TERMS", "extra_terms 需為 JSON 字串陣列。"),
+    )
+    app.add_exception_handler(
+        AsrTimeout, _error_handler(504, "ASR_TIMEOUT", "語音辨識服務回應逾時。")
+    )
+    app.add_exception_handler(
+        AsrUnavailable,
+        _error_handler(502, "ASR_UNAVAILABLE", "語音辨識服務暫時無法使用。"),
     )
 
     app.add_middleware(OriginGuardMiddleware, allowed_origins=settings.allowed_origins)

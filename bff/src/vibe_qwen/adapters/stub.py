@@ -2,7 +2,17 @@
 
 from pathlib import Path
 
-from vibe_qwen.adapters.base import TranscriptionResult
+from vibe_qwen.adapters.base import Segment, TranscriptionResult
+
+# dev / 無 GPU 環境的預設假辨識，讓 UI 在無模型服務時仍可操作。
+DEFAULT_STUB_ASR_RESULT = TranscriptionResult(
+    segments=[
+        Segment(Start=0.0, End=2.0, Speaker="語者 1", Content="（stub 模式假辨識）")
+    ],
+    raw_text="（stub 模式假辨識）",
+    transcription_only="（stub 模式假辨識）",
+    duration=2.0,
+)
 
 
 class StubAsrClient:

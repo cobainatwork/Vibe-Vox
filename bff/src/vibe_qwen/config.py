@@ -58,6 +58,24 @@ class Settings:
     asr_sample_rate: int = field(
         default_factory=_env("VIBE_QWEN_ASR_SAMPLE_RATE", "16000", int)
     )
+    # 遠端語音轉文字模型（vLLM）位址；預設對齊 compose 的 vllm 服務（同機部署內部位址）。
+    asr_base_url: str = field(
+        default_factory=_env("VIBE_QWEN_ASR_BASE_URL", "http://vllm:8000", str)
+    )
+    # vLLM serve 的 ASR 模型 ID（chat completions 的 model 參數）；對齊 compose。
+    asr_model: str = field(
+        default_factory=_env("VIBE_QWEN_ASR_MODEL", "PLACEHOLDER_ASR_MODEL_ID", str)
+    )
+    # 呼叫遠端 ASR 的逾時（秒）：涵蓋網路 + 模型推論，較 ffmpeg 寬。
+    asr_timeout_seconds: float = field(
+        default_factory=_env("VIBE_QWEN_ASR_TIMEOUT_SECONDS", "120", float)
+    )
+    # 無 GPU 環境（dev）以 stub adapter 回假結果啟動，不連真實模型服務。
+    use_stub_models: bool = field(
+        default_factory=_env(
+            "VIBE_QWEN_USE_STUB_MODELS", "false", lambda v: v.lower() == "true"
+        )
+    )
     # FFmpeg 轉碼子進程逾時（秒）。
     ffmpeg_timeout_seconds: float = field(
         default_factory=_env("VIBE_QWEN_FFMPEG_TIMEOUT_SECONDS", "60", float)

@@ -4,6 +4,7 @@
 並以假音檔輸入模組（_FakeIntake）避開 ffmpeg，讓 HTTP seam 測試本機可跑。
 """
 
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from vibe_qwen.adapters.base import Segment, TranscriptionResult
 from vibe_qwen.adapters.stub import StubAsrClient
+from vibe_qwen.adapters.vllm_asr import AsrTimeout, AsrUnavailable, VllmAsrClient
 from vibe_qwen.audio.errors import (
     FileTooLarge,
     TranscodeError,
@@ -259,3 +261,84 @@ def test_transcribe_rejects_non_string_extra_terms(tmp_path):
 
     assert resp.status_code == 400
     assert resp.json()["error"]["code"] == "INVALID_EXTRA_TERMS"
+
+
+class _RaisingAsr:
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    async def health(self) -> bool:
+        return True
+
+    async def transcribe(self, audio, *, context):
+        raise self._exc
+
+
+@pytest.mark.parametrize(
+    "exc, status",
+    [(AsrTimeout(), 504), (AsrUnavailable(), 502)],
+)
+def test_transcribe_maps_upstream_asr_errors(tmp_path, exc, status):
+    client = TestClient(
+        create_app(
+            settings=Settings(db_path=tmp_path / "t.db"),
+            asr_client=_RaisingAsr(exc),
+            audio_intake=_FakeIntake(),
+        )
+    )
+
+    resp = client.post(
+        "/api/asr/transcribe",
+        files={"file": ("a.wav", b"RIFF\x00\x00\x00\x00WAVE", "audio/wav")},
+    )
+
+    assert resp.status_code == status
+
+
+def test_create_app_selects_client_by_use_stub_models(tmp_path):
+    stub_app = create_app(settings=Settings(db_path=tmp_path / "s.db", use_stub_models=True))
+    assert isinstance(stub_app.state.asr_client, StubAsrClient)
+
+    real_app = create_app(settings=Settings(db_path=tmp_path / "r.db", use_stub_models=False))
+    assert isinstance(real_app.state.asr_client, VllmAsrClient)
+
+
+def test_transcribe_load_sheds_beyond_concurrency_limit(tmp_path):
+    # 真 client 上線後併發辨識會搶 GPU；guard 達上限即 load-shed 503。
+    from httpx import ASGITransport, AsyncClient
+
+    release = asyncio.Event()
+    result = TranscriptionResult(
+        segments=[], raw_text="", transcription_only="", duration=0.0
+    )
+
+    class _BlockingAsr:
+        async def health(self):
+            return True
+
+        async def transcribe(self, audio, *, context):
+            await release.wait()
+            return result
+
+    app = create_app(
+        settings=Settings(db_path=tmp_path / "t.db", max_concurrent_heavy_requests=1),
+        asr_client=_BlockingAsr(),
+        audio_intake=_FakeIntake(),
+    )
+    files = {"file": ("a.wav", b"RIFF\x00\x00\x00\x00WAVE", "audio/wav")}
+
+    async def scenario():
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://t"
+        ) as ac:
+            first = asyncio.create_task(ac.post("/api/asr/transcribe", files=files))
+            await asyncio.sleep(0.05)  # 讓 first 占住唯一 slot
+            second = await ac.post("/api/asr/transcribe", files=files)
+            release.set()
+            return await first, second
+
+    first_resp, second = asyncio.run(scenario())
+
+    assert second.status_code == 503
+    assert second.json()["error"]["code"] == "TOO_MANY_REQUESTS"
+    assert first_resp.status_code == 200

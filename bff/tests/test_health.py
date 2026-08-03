@@ -3,11 +3,12 @@
 from fastapi.testclient import TestClient
 
 from vibe_qwen.adapters.stub import StubAsrClient, StubTtsClient
+from vibe_qwen.config import Settings
 from vibe_qwen.main import create_app
 
 
 def test_health_reports_both_services_ready_with_stub_adapters():
-    app = create_app()  # 預設注入 stub adapter，兩者皆就緒
+    app = create_app(settings=Settings(use_stub_models=True))  # stub 模式，兩者皆就緒
     client = TestClient(app)
 
     resp = client.get("/api/health")
