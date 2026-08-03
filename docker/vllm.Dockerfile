@@ -20,13 +20,14 @@ WORKDIR /app
 RUN pip install --no-cache-dir -e /app
 
 # 模型權重 build 時下載進 image（開箱即用、runtime 零下載）。
-# 若 microsoft/VibeVoice-ASR-HF 為 gated model，build 時帶 --build-arg HF_TOKEN=<你的 token>。
+# 官方 vLLM plugin 用 microsoft/VibeVoice-ASR（非 -HF；-HF 是 transformers v5.3.0+ 直接用的格式，
+# vLLM plugin 的 transformers v4 不認得）。若為 gated model，build 時帶 --build-arg HF_TOKEN=<token>。
 ARG HF_TOKEN=""
 ENV HF_TOKEN=${HF_TOKEN}
-RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download('microsoft/VibeVoice-ASR-HF')"
+RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download('microsoft/VibeVoice-ASR')"
 
 # 官方啟動腳本：生成 tokenizer files 並以官方參數 vllm serve
 # （--served-model-name vibevoice --trust-remote-code --chat-template-content-format openai 等）；
 # 模型已在快取，不再下載。
 ENTRYPOINT []
-CMD ["python3", "/app/vllm_plugin/scripts/start_server.py", "--model", "microsoft/VibeVoice-ASR-HF"]
+CMD ["python3", "/app/vllm_plugin/scripts/start_server.py"]
