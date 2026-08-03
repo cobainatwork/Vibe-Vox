@@ -63,7 +63,7 @@ BFF 有一層 Origin 防護（`OriginGuardMiddleware`），規則是「來源存
 
 不符者回 400 `UNSUPPORTED_AUDIO_FORMAT`。此為廉價前置閘，真正的解碼驗證由 ffmpeg 執行——通過 sniff 但無法解碼者回 400 `TRANSCODE_ERROR`。
 
-所有輸入一律轉碼為 **16 kHz 單聲道 wav** 後才送入模型。取樣率由 `VIBE_VOX_ASR_SAMPLE_RATE` 控制，預設 16000。
+所有輸入一律轉碼為 **24 kHz 單聲道 wav** 後才送入模型。取樣率由 `VIBE_VOX_ASR_SAMPLE_RATE` 控制，預設 24000，對齊官方 vLLM plugin 的目標取樣率——plugin 內部一律 resample 至 24 kHz，故先降至更低取樣率只會丟失無法還原的高頻。
 
 ### 3.3 大小與長度上限
 
