@@ -53,10 +53,16 @@ class Settings:
     audio_max_bytes: int = field(
         default_factory=_env("VIBE_VOX_AUDIO_MAX_BYTES", "209715200", int)
     )
-    # ASR 目標取樣率預設（provisional）；正確值於 #5 接 VibeVoice-ASR 時確認。
+    # ASR 目標取樣率：對齊官方 vllm_plugin/inputs.py，該處三度寫死 24000
+    # （load_audio 的 target_sr、load_audio_bytes_use_ffmpeg、duration 換算）。
+    # 原設 16000 會對高取樣率來源（如 48k 上傳檔）先降採樣、再由 plugin 上採樣
+    # 回 24k，8kHz 以上的真實內容被我方丟棄且無法還原。設為 24000 則一次降採樣、
+    # plugin 端成為 no-op。
+    # 註：AI_practise 前端錄音本身即 16k（recorder.ts 的 TARGET_RATE），該來源
+    # 改與不改等價；本設定的收益在管理平面上傳的高取樣率音檔。
     # transcode_to_wav 的 sample_rate 為必填參數，模組本身不硬編此值。
     asr_sample_rate: int = field(
-        default_factory=_env("VIBE_VOX_ASR_SAMPLE_RATE", "16000", int)
+        default_factory=_env("VIBE_VOX_ASR_SAMPLE_RATE", "24000", int)
     )
     # 遠端語音轉文字模型（vLLM）位址；預設對齊 compose 的 vllm 服務（同機部署內部位址）。
     asr_base_url: str = field(
