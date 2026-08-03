@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-Issues 與 PRD 追蹤於本 repo 的 GitHub Issues（cobainatwork/Vibe-Qwen）。所有操作使用 `gh` CLI，`gh` 於 clone 內自動推斷 repo。
+Issues 與 PRD 追蹤於本 repo 的 GitHub Issues（cobainatwork/Vibe-Vox）。所有操作使用 `gh` CLI，`gh` 於 clone 內自動推斷 repo。
 
 ## Conventions
 
@@ -25,4 +25,4 @@ Issues 與 PRD 追蹤於本 repo 的 GitHub Issues（cobainatwork/Vibe-Qwen）�
 
 ## Blocking edges
 
-優先用 GitHub 原生 issue dependencies：`gh api --method POST repos/cobainatwork/Vibe-Qwen/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`（blocker 的數值 database id 由 `gh api repos/cobainatwork/Vibe-Qwen/issues/<n> --jq .id` 取得，非 `#number`）。不可用時，退回在 body 或留言寫 `Blocked by: #<n>`。blocker 全部關閉即解除封鎖。
+優先用 GitHub 原生 issue dependencies：`gh api --method POST repos/cobainatwork/Vibe-Vox/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`（blocker 的數值 database id 由 `gh api repos/cobainatwork/Vibe-Vox/issues/<n> --jq .id` 取得，非 `#number`）。不可用時，退回在 body 或留言寫 `Blocked by: #<n>`。blocker 全部關閉即解除封鎖。

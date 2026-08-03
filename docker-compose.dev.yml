@@ -1,4 +1,4 @@
-# Vibe-Qwen dev 編排：無 GPU 工作機用。僅 BFF 與前端，BFF 預設即以 stub
+# Vibe-Vox dev 編排：無 GPU 工作機用。僅 BFF 與前端，BFF 預設即以 stub
 # adapter 啟動（真實 AsrClient/TtsClient 於 #2/#4 落地），故無需 vLLM/TTS。
 
 services:
@@ -6,8 +6,8 @@ services:
     build:
       context: ./bff
     environment:
-      VIBE_QWEN_FRONTEND_ORIGINS: "http://localhost:5173"
-      VIBE_QWEN_USE_STUB_MODELS: "true"
+      VIBE_VOX_FRONTEND_ORIGINS: "http://localhost:5173"
+      VIBE_VOX_USE_STUB_MODELS: "true"
     ports:
       - "8000:8000"
     networks:

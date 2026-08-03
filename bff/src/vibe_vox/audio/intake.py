@@ -10,9 +10,9 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from vibe_qwen.audio.errors import FileTooLarge, UnsupportedAudioFormat
-from vibe_qwen.audio.sniff import detect_audio_format
-from vibe_qwen.audio.transcode import transcode_to_wav
+from vibe_vox.audio.errors import FileTooLarge, UnsupportedAudioFormat
+from vibe_vox.audio.sniff import detect_audio_format
+from vibe_vox.audio.transcode import transcode_to_wav
 
 # 足以涵蓋所有允許格式的 magic（皆落在檔首前 12 bytes），遠小於整檔。
 _HEADER_WINDOW = 64

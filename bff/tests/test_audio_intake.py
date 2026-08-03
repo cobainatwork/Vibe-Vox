@@ -9,8 +9,8 @@ import uuid
 
 import pytest
 
-from vibe_qwen.audio.errors import FileTooLarge, UnsupportedAudioFormat
-from vibe_qwen.audio.intake import save_upload
+from vibe_vox.audio.errors import FileTooLarge, UnsupportedAudioFormat
+from vibe_vox.audio.intake import save_upload
 
 _WAV_HEADER = b"RIFF\x00\x00\x00\x00WAVE"
 
@@ -67,7 +67,7 @@ def test_oversize_raises_and_stops_consuming_stream(tmp_path):
 
 def test_o_excl_refuses_to_overwrite_existing_target(tmp_path, monkeypatch):
     fixed = uuid.UUID(int=1)
-    monkeypatch.setattr("vibe_qwen.audio.intake.uuid.uuid4", lambda: fixed)
+    monkeypatch.setattr("vibe_vox.audio.intake.uuid.uuid4", lambda: fixed)
     victim = tmp_path / fixed.hex
     victim.write_bytes(b"pre-existing")
     with pytest.raises(FileExistsError):

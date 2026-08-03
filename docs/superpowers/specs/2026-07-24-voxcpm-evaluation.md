@@ -1,7 +1,7 @@
-# 研究：VoxCPM（OpenBMB）是否滿足 Vibe-Qwen 的合規 + clone + 逐句情緒 + 台灣口語化需求
+# 研究：VoxCPM（OpenBMB）是否滿足 Vibe-Vox 的合規 + clone + 逐句情緒 + 台灣口語化需求
 
 日期：2026-07-24
-研究問題：開源 TTS 專案 VoxCPM（GitHub `OpenBMB/VoxCPM`）能否滿足 Vibe-Qwen 的需求，第一級為**授權合規**（能否公司內部自架、商用），其次為 (A) 對「克隆出的音色」做情緒控制且最好可逐句調整、(B) 產出台灣口語化中文語音、(C) 與 VibeVoice-ASR 共存於單張 RTX 6000 Ada 48GB 並包進現行 `TtsClient` adapter 對齊 `/api/tts/speech` 契約。
+研究問題：開源 TTS 專案 VoxCPM（GitHub `OpenBMB/VoxCPM`）能否滿足 Vibe-Vox 的需求，第一級為**授權合規**（能否公司內部自架、商用），其次為 (A) 對「克隆出的音色」做情緒控制且最好可逐句調整、(B) 產出台灣口語化中文語音、(C) 與 VibeVoice-ASR 共存於單張 RTX 6000 Ada 48GB 並包進現行 `TtsClient` adapter 對齊 `/api/tts/speech` 契約。
 可信度分級：每條結論後標註來源，區分「官方 primary」與「社群」。無來源佐證者明寫「無來源，無法證實／需實測」，不臆測。
 查證方法註記：本文對合規關鍵事實（VoxCPM2 存在性、授權標籤）以 Playwright 直接讀取 HuggingFace 真實 DOM，並以 GitHub API 取回權威 repo 統計，避免二手轉述或摘要幻覺；技術規格以 arXiv 技術報告與官方 README／模型卡佐證。
 
@@ -27,7 +27,7 @@
 
 **(C) 單 48GB GPU 共存 + 現行 adapter：可行。**
 - VoxCPM2 推論約 ~8 GB VRAM（bf16）。vLLM `gpu_memory_utilization` 壓 0.55-0.6 時保留約 26-29GB 給 ASR，剩約 19-22GB，容納 8GB TTS 進程有餘裕。〔官方 primary（VRAM）〕 https://huggingface.co/openbmb/VoxCPM2
-- VoxCPM 以「獨立原生 Python 進程」推論（不經 vLLM），與 Vibe-Qwen 既定「TTS 走獨立原生進程 + `TtsClient` adapter」架構一致。原生輸出 48kHz，adapter 內需重採樣為 24kHz/mono/16-bit（clean downsample，見 §7）。
+- VoxCPM 以「獨立原生 Python 進程」推論（不經 vLLM），與 Vibe-Vox 既定「TTS 走獨立原生進程 + `TtsClient` adapter」架構一致。原生輸出 48kHz，adapter 內需重採樣為 24kHz/mono/16-bit（clean downsample，見 §7）。
 
 **總判：應採用（作為情緒可控 clone 引擎），並列為 IndexTTS2 停案後首選。** 授權比 IndexTTS2 乾淨（Apache-2.0 vs bilibili），能力上以「音色保留 + 逐句風格控制」補上 Qwen3-TTS／GLM 的情緒缺口。落地前保留兩道 spike：台灣口語化（無官方依據）、Controllable 模式音色相似度是否足夠（因逐句情緒需求會排除 Hi-Fi 模式）。
 

@@ -7,8 +7,8 @@ import json
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 
-from vibe_qwen.adapters.base import AsrClient
-from vibe_qwen.hotword_text import compile_context, enforce_context_budget, sanitize_text
+from vibe_vox.adapters.base import AsrClient
+from vibe_vox.hotword_text import compile_context, enforce_context_budget, sanitize_text
 
 router = APIRouter()
 

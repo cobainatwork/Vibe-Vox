@@ -10,7 +10,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from vibe_qwen.adapters.vllm_asr import AsrTimeout, AsrUnavailable, VllmAsrClient
+from vibe_vox.adapters.vllm_asr import AsrTimeout, AsrUnavailable, VllmAsrClient
 
 
 def _wav(tmp_path) -> Path:

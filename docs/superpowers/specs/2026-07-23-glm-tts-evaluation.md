@@ -1,8 +1,8 @@
-# GLM-TTS 評估：是否滿足 Vibe-Qwen 需求
+# GLM-TTS 評估：是否滿足 Vibe-Vox 需求
 
 - 調查日期：2026-07-23
 - 對象：`zai-org/GLM-TTS`（Zhipu AI / z.ai，GLM 團隊）
-- 評估目的：作為 Vibe-Qwen TTS 供應端的第三候選，與 Qwen3-TTS、IndexTTS2 對比
+- 評估目的：作為 Vibe-Vox TTS 供應端的第三候選，與 Qwen3-TTS、IndexTTS2 對比
 - 來源標記：`官方 primary` 指官方 README／原始碼／arXiv 論文／模型卡／LICENSE；`社群` 指第三方轉述
 
 ---

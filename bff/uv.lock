@@ -333,7 +333,7 @@ wheels = [
 ]
 
 [[package]]
-name = "vibe-qwen-bff"
+name = "vibe-vox-bff"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

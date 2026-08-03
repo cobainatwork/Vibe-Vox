@@ -3,7 +3,7 @@
 seam：detect_audio_format(header) — 僅依標頭位元組判容器型別，不信副檔名。
 """
 
-from vibe_qwen.audio.sniff import detect_audio_format
+from vibe_vox.audio.sniff import detect_audio_format
 
 
 def test_detects_each_allowed_container_by_magic():

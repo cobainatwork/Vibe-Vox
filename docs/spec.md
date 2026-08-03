@@ -1,4 +1,4 @@
-# Spec：Vibe-Qwen ASR/TTS 測試與管理平台
+# Spec：Vibe-Vox ASR/TTS 測試與管理平台
 
 本 spec 由 grill-with-docs 對話合成，使用 [CONTEXT.md](../CONTEXT.md) 的領域詞彙，並遵守 [ADR-0001 解耦模型服務](./adr/0001-decoupled-model-serving.md) 與 [ADR-0002 Voice design 定版](./adr/0002-design-voice-pinned-on-create.md)。
 
@@ -10,7 +10,7 @@ AI_practise（智能陪練平台）需要一個自架的 ASR/TTS 後端來驅動
 
 ## Solution
 
-Vibe-Qwen 是一個 ASR/TTS 後端服務，同時服務兩類消費者。**消費端資料平面**以 REST 契約供 AI_practise 呼叫，取代其現行 VibeVoice-ASR + CosyVoice 的 :8088 服務，把 TTS 換為 Qwen3-TTS。**管理平面**是一個統一操作頁，供操作者設定與測試同一後端。管理平面讓操作者完成四件事：
+Vibe-Vox 是一個 ASR/TTS 後端服務，同時服務兩類消費者。**消費端資料平面**以 REST 契約供 AI_practise 呼叫，取代其現行 VibeVoice-ASR + CosyVoice 的 :8088 服務，把 TTS 換為 Qwen3-TTS。**管理平面**是一個統一操作頁，供操作者設定與測試同一後端。管理平面讓操作者完成四件事：
 
 1. 管理 Hotword 清單（新增、編輯、刪除、啟用切換、匯入、匯出），辨識時系統自動把啟用中的 Hotword 編譯成 context 注入 ASR。
 2. 上傳常見格式音檔做 ASR 測試，取得帶語者與時間戳的 Who/When/What 結果，並可臨時覆寫本次 context。
@@ -192,7 +192,7 @@ Vibe-Qwen 是一個 ASR/TTS 後端服務，同時服務兩類消費者。**消�
 
 - 建置前需做一次 spike，確認 TTS 服務層採用哪一種實作最穩定且完整支援 clone／design／instruct 三者：自寫薄的原生 `qwen-tts` 服務、vLLM-Omni、或經審視的社群 OpenAI 相容 wrapper。本 spec 傾向自寫原生服務以確保三種機制可控。
 - 本地無 GPU 開發模式：測試用的 `AsrClient`／`TtsClient` stub 應同時可用於本地開發。提供 `docker-compose.dev.yml`（或等效設定）在無 48GB GPU 的工作機上以 stub adapter 啟動前端與 BFF，讓日常 UI／BFF 開發脫離高階 GPU 環境，降低 onboarding 摩擦。
-- 消費端遷移：Vibe-Qwen 取代 AI_practise 現行 :8088（VibeVoice-ASR + CosyVoice）。TTS 契約 `/api/tts/speech` 形狀不變，主要為端點重指與 Qwen 的 instruct 對應；ASR 由 WebSocket 改 REST，需在 AI_practise 新增 REST 版 AsrProvider（現有 provider 可插拔設計支援）。兩 repo 皆由 Claude 協同開發，可一併處理。詳見 ADR-0003。
+- 消費端遷移：Vibe-Vox 取代 AI_practise 現行 :8088（VibeVoice-ASR + CosyVoice）。TTS 契約 `/api/tts/speech` 形狀不變，主要為端點重指與 Qwen 的 instruct 對應；ASR 由 WebSocket 改 REST，需在 AI_practise 新增 REST 版 AsrProvider（現有 provider 可插拔設計支援）。兩 repo 皆由 Claude 協同開發，可一併處理。詳見 ADR-0003。
 - Instruction 範例需策展一份清單（涵蓋語氣、情緒、韻律、角色設定），對應 User Story 31。
 - Hotword context 與音訊共用 64K token 預算，UI 的 token 估算是防止準確度反被稀釋的重要防線。
 - 原廠資源與連結（模型權重 HF id、vLLM 服務文件、transformers ASR 文件、Qwen3-TTS 套件與 demo）已在對話中彙整，實作時作為連線方式與選項的依據；需求 4 的「原廠資源連結與選項」以此為準。
