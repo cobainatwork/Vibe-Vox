@@ -5,14 +5,20 @@
 """
 
 import asyncio
+import wave
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from vibe_vox.adapters.base import Segment, TranscriptionResult
-from vibe_vox.adapters.stub import StubAsrClient
+from vibe_vox.adapters.aligner import (
+    AlignerTimeout,
+    AlignerUnavailable,
+    HttpAlignerClient,
+)
+from vibe_vox.adapters.base import Segment, TranscriptionResult, Word
+from vibe_vox.adapters.stub import StubAlignerClient, StubAsrClient
 from vibe_vox.adapters.vllm_asr import AsrTimeout, AsrUnavailable, VllmAsrClient
 from vibe_vox.audio.errors import (
     FileTooLarge,
@@ -25,13 +31,30 @@ from vibe_vox.main import create_app
 
 
 class _FakeIntake:
-    """假音檔輸入模組：消耗 chunks、yield 固定 wav path，避開 ffmpeg。"""
+    """假音檔輸入模組：消耗 chunks、yield 真 wav path，避開 ffmpeg。
+
+    產出真檔而非不存在的路徑：端點需讀音檔實際長度（`alignment.audio_duration`），
+    而該值不能以 Segment End 最大值代替（docs/api/asr.md §4.2）。
+    """
+
+    def __init__(self, directory: Path, seconds: float = 2.0) -> None:
+        self._directory = directory
+        self._seconds = seconds
 
     @asynccontextmanager
     async def transcoded(self, chunks, *, sample_rate, channels=1):
         async for _ in chunks:
             pass
-        yield Path("fake.wav")
+        path = self._directory / "fake.wav"
+        with wave.open(str(path), "wb") as w:
+            w.setnchannels(channels)
+            w.setsampwidth(2)
+            w.setframerate(sample_rate)
+            w.writeframes(b"\x00\x00" * int(self._seconds * sample_rate))
+        try:
+            yield path
+        finally:
+            path.unlink(missing_ok=True)
 
 
 class _RaisingIntake:
@@ -48,12 +71,26 @@ class _RaisingIntake:
         yield  # pragma: no cover — 使函式成為 async generator
 
 
-def _client(tmp_path, result):
+class _RaisingAligner:
+    """對齊服務不可用的替身，驗證第二層降級。"""
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    async def health(self) -> bool:
+        return False
+
+    async def align(self, audio, segments):
+        raise self._exc
+
+
+def _client(tmp_path, result, aligner_client=None):
     return TestClient(
         create_app(
             settings=Settings(db_path=tmp_path / "t.db"),
             asr_client=StubAsrClient(result=result),
-            audio_intake=_FakeIntake(),
+            aligner_client=aligner_client or StubAlignerClient(),
+            audio_intake=_FakeIntake(tmp_path),
         )
     )
 
@@ -74,14 +111,111 @@ def test_transcribe_returns_consumer_contract_shape(tmp_path):
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["segments"] == [
-        {"Start": 0.0, "End": 1.2, "Speaker": "A", "Content": "你好"}
-    ]
+    # 向後相容：既有四欄形狀與值不變，對齊只加欄位（ADR-0004 契約擴充）。
+    segment = body["segments"][0]
+    assert segment["Start"] == 0.0  # 未對齊時維持切點語義
+    assert segment["End"] == 1.2
+    assert segment["Speaker"] == "A"
+    assert segment["Content"] == "你好"
     assert body["raw_text"] == "你好"
     assert body["transcription_only"] == "你好"
     assert body["duration"] == 1.2
     assert body["applied_context"] == ""
     assert "data" not in body  # 消費端契約不套 {data} 信封
+
+
+def test_transcribe_returns_word_level_alignment(tmp_path):
+    # 段長 0.9 秒配 0.48 秒的對齊跨距：VibeVoice 的窮盡連續切分下，正常段的跨距
+    # 應接近段長，過短會被合理性檢查攔下（見 test_alignment.py）。
+    result = TranscriptionResult(
+        segments=[Segment(Start=0.0, End=0.9, Speaker="A", Content="你好")],
+        raw_text="你好",
+        transcription_only="你好",
+        duration=0.9,
+    )
+    words = [
+        [Word(Text="你", Start=0.42, End=0.58), Word(Text="好", Start=0.58, End=0.90)]
+    ]
+    client = _client(tmp_path, result, aligner_client=StubAlignerClient(result=words))
+
+    resp = client.post(
+        "/api/asr/transcribe",
+        files={"file": ("a.wav", b"RIFF\x00\x00\x00\x00WAVE", "audio/wav")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    segment = body["segments"][0]
+    assert segment["aligned"] is True
+    assert segment["words"] == [
+        {"Text": "你", "Start": 0.42, "End": 0.58},
+        {"Text": "好", "Start": 0.58, "End": 0.90},
+    ]
+    # 段界改為首字 Start／末字 End；原切點 0.0／1.2 已被取代。
+    assert segment["Start"] == 0.42
+    assert segment["End"] == 0.90
+    assert body["duration"] == 0.90  # 隨段界重算
+    assert body["alignment"] == {
+        "audio_duration": 2.0,  # _FakeIntake 產生的音檔實際長度
+        "speech_start": 0.42,
+        "speech_end": 0.90,
+        "aligned_duration": 0.48,
+    }
+
+
+@pytest.mark.parametrize("exc", [AlignerUnavailable(), AlignerTimeout()])
+def test_transcribe_still_returns_transcript_when_aligner_fails(tmp_path, exc):
+    # 第二層降級（ADR-0004）：逐字稿有獨立價值，不因評分這項附加功能失效而一併
+    # 不可得。故對齊服務掛掉或逾時**不得**映射成 502／504。
+    result = TranscriptionResult(
+        segments=[Segment(Start=0.0, End=1.2, Speaker="A", Content="你好")],
+        raw_text="你好",
+        transcription_only="你好",
+        duration=1.2,
+    )
+    client = _client(tmp_path, result, aligner_client=_RaisingAligner(exc))
+
+    resp = client.post(
+        "/api/asr/transcribe",
+        files={"file": ("a.wav", b"RIFF\x00\x00\x00\x00WAVE", "audio/wav")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["transcription_only"] == "你好"  # 逐字稿照常
+    segment = body["segments"][0]
+    assert segment["aligned"] is False
+    assert segment["words"] == []
+    assert (segment["Start"], segment["End"]) == (0.0, 1.2)  # 退回切點語義
+    assert body["alignment"] == {
+        "audio_duration": 2.0,
+        "speech_start": None,
+        "speech_end": None,
+        "aligned_duration": 0.0,
+    }
+
+
+def test_transcribe_returns_complete_alignment_structure_without_speech(tmp_path):
+    # 學員全程未發話：alignment 結構完整回傳、值為 null 或 0，不報錯不省略欄位。
+    result = TranscriptionResult(
+        segments=[], raw_text="", transcription_only="", duration=0.0
+    )
+    client = _client(tmp_path, result)
+
+    resp = client.post(
+        "/api/asr/transcribe",
+        files={"file": ("a.wav", b"RIFF\x00\x00\x00\x00WAVE", "audio/wav")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["segments"] == []
+    assert body["alignment"] == {
+        "audio_duration": 2.0,
+        "speech_start": None,
+        "speech_end": None,
+        "aligned_duration": 0.0,
+    }
 
 
 def test_transcribe_applies_enabled_hotword_context(tmp_path):
@@ -93,7 +227,8 @@ def test_transcribe_applies_enabled_hotword_context(tmp_path):
         create_app(
             settings=Settings(db_path=tmp_path / "t.db"),
             asr_client=stub,
-            audio_intake=_FakeIntake(),
+            aligner_client=StubAlignerClient(),
+            audio_intake=_FakeIntake(tmp_path),
         )
     )
     client.post("/api/admin/hotwords", json={"term": "台積電"})
@@ -124,7 +259,8 @@ def test_transcribe_appends_extra_terms_to_enabled(tmp_path):
         create_app(
             settings=Settings(db_path=tmp_path / "t.db"),
             asr_client=StubAsrClient(result=result),
-            audio_intake=_FakeIntake(),
+            aligner_client=StubAlignerClient(),
+            audio_intake=_FakeIntake(tmp_path),
         )
     )
     client.post("/api/admin/hotwords", json={"term": "台積電"})
@@ -150,7 +286,8 @@ def test_transcribe_override_replaces_enabled_terms(tmp_path):
         create_app(
             settings=Settings(db_path=tmp_path / "t.db"),
             asr_client=StubAsrClient(result=result),
-            audio_intake=_FakeIntake(),
+            aligner_client=StubAlignerClient(),
+            audio_intake=_FakeIntake(tmp_path),
         )
     )
     client.post("/api/admin/hotwords", json={"term": "台積電"})
@@ -176,7 +313,8 @@ def test_transcribe_rejects_context_over_budget(tmp_path):
         create_app(
             settings=Settings(db_path=tmp_path / "t.db", hotword_context_token_budget=5),
             asr_client=StubAsrClient(result=result),
-            audio_intake=_FakeIntake(),
+            aligner_client=StubAlignerClient(),
+            audio_intake=_FakeIntake(tmp_path),
         )
     )
     client.post("/api/admin/hotwords", json={"term": "台積電聯發科鴻海"})
@@ -226,7 +364,8 @@ def test_transcribe_rejects_malformed_extra_terms(tmp_path):
         create_app(
             settings=Settings(db_path=tmp_path / "t.db"),
             asr_client=StubAsrClient(result=result),
-            audio_intake=_FakeIntake(),
+            aligner_client=StubAlignerClient(),
+            audio_intake=_FakeIntake(tmp_path),
         )
     )
 
@@ -249,7 +388,8 @@ def test_transcribe_rejects_non_string_extra_terms(tmp_path):
         create_app(
             settings=Settings(db_path=tmp_path / "t.db"),
             asr_client=StubAsrClient(result=result),
-            audio_intake=_FakeIntake(),
+            aligner_client=StubAlignerClient(),
+            audio_intake=_FakeIntake(tmp_path),
         )
     )
 
@@ -283,7 +423,8 @@ def test_transcribe_maps_upstream_asr_errors(tmp_path, exc, status):
         create_app(
             settings=Settings(db_path=tmp_path / "t.db"),
             asr_client=_RaisingAsr(exc),
-            audio_intake=_FakeIntake(),
+            aligner_client=StubAlignerClient(),
+            audio_intake=_FakeIntake(tmp_path),
         )
     )
 
@@ -298,9 +439,11 @@ def test_transcribe_maps_upstream_asr_errors(tmp_path, exc, status):
 def test_create_app_selects_client_by_use_stub_models(tmp_path):
     stub_app = create_app(settings=Settings(db_path=tmp_path / "s.db", use_stub_models=True))
     assert isinstance(stub_app.state.asr_client, StubAsrClient)
+    assert isinstance(stub_app.state.aligner_client, StubAlignerClient)
 
     real_app = create_app(settings=Settings(db_path=tmp_path / "r.db", use_stub_models=False))
     assert isinstance(real_app.state.asr_client, VllmAsrClient)
+    assert isinstance(real_app.state.aligner_client, HttpAlignerClient)
 
 
 def test_transcribe_load_sheds_beyond_concurrency_limit(tmp_path):
@@ -323,7 +466,7 @@ def test_transcribe_load_sheds_beyond_concurrency_limit(tmp_path):
     app = create_app(
         settings=Settings(db_path=tmp_path / "t.db", max_concurrent_heavy_requests=1),
         asr_client=_BlockingAsr(),
-        audio_intake=_FakeIntake(),
+        audio_intake=_FakeIntake(tmp_path),
     )
     files = {"file": ("a.wav", b"RIFF\x00\x00\x00\x00WAVE", "audio/wav")}
 

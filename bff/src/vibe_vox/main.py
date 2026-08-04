@@ -7,9 +7,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
-from vibe_vox.adapters.base import AsrClient, TtsClient
+from vibe_vox.adapters.aligner import HttpAlignerClient
+from vibe_vox.adapters.base import AlignerClient, AsrClient, TtsClient
 from vibe_vox.adapters.stub import (
     DEFAULT_STUB_ASR_RESULT,
+    StubAlignerClient,
     StubAsrClient,
     StubTtsClient,
 )
@@ -45,11 +47,23 @@ def _default_asr_client(settings: Settings) -> AsrClient:
     )
 
 
+def _default_aligner_client(settings: Settings) -> AlignerClient:
+    """dev（無 GPU）用 stub 回全段未對齊；否則接 aligner 服務。"""
+    if settings.use_stub_models:
+        return StubAlignerClient()
+    return HttpAlignerClient(
+        settings.aligner_base_url,
+        timeout=settings.aligner_timeout_seconds,
+        slice_buffer_seconds=settings.aligner_slice_buffer_seconds,
+    )
+
+
 def create_app(
     asr_client: AsrClient | None = None,
     tts_client: TtsClient | None = None,
     settings: Settings | None = None,
     audio_intake: AudioIntake | None = None,
+    aligner_client: AlignerClient | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
 
@@ -61,6 +75,7 @@ def create_app(
     app = FastAPI(title="Vibe-Vox BFF", lifespan=lifespan)
     app.state.settings = settings
     app.state.asr_client = asr_client or _default_asr_client(settings)
+    app.state.aligner_client = aligner_client or _default_aligner_client(settings)
     app.state.tts_client = tts_client or StubTtsClient()
     app.state.audio_intake = audio_intake or AudioIntake(
         temp_dir=settings.temp_dir,

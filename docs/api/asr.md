@@ -2,7 +2,7 @@
 
 消費端資料平面的語音辨識端點。回合制批次辨識——送一段完整音檔、拿一份完整結果，不做邊講邊出的即時 partial。
 
-本文標記兩種狀態：**〔現行〕** 已實作並經測試涵蓋；**〔規劃〕** 已於 ADR-0004 定案但尚未實作。規劃欄位在實作前不會出現在回應中。
+本文所述皆為**已實作並經測試涵蓋**的行為。字級強制對齊（ADR-0004）於 #28 落地，原標記為〔規劃〕的欄位現已生效。
 
 ---
 
@@ -85,7 +85,7 @@ BFF 有一層 Origin 防護（`OriginGuardMiddleware`），規則是「來源存
 
 **錯誤回應一律套信封**：`{"error": {"code": "...", "message": "..."}}`。
 
-### 4.2 成功回應 〔現行〕
+### 4.2 成功回應：核心欄位
 
 ```jsonc
 {
@@ -111,26 +111,30 @@ BFF 有一層 Origin 防護（`OriginGuardMiddleware`），規則是「來源存
 | `segments[].Content` | string | 該段文字，已轉台灣繁體（OpenCC `s2tw`，純字形轉換、不改詞彙） |
 | `raw_text` | string | 模型原始輸出，**保留簡體**。用於比對繁化前後差異、排查解析問題 |
 | `transcription_only` | string | 純逐字稿。模型輸出非 JSON 時，此欄為繁化後的原始文字，`segments` 為空陣列 |
-| `duration` | float，秒 | 所有 Segment 的 `End` 最大值。`segments` 為空時為 `0.0`。**這不是音檔實際長度**——尾端靜音不計入，故恆小於或等於實際長度 |
+| `duration` | float，秒 | 所有 Segment 的 `End` 最大值。`segments` 為空時為 `0.0`。**這不是音檔實際長度**——尾端靜音不計入，故恆小於或等於實際長度。定義不變，但段界已隨對齊重算，故其值隨 `aligned` 改變；要音檔實際長度請用 `alignment.audio_duration` |
 | `applied_context` | string | 實際注入的 context，**以頓號（`、`）連接各 Hotword**。用於確認 Hotword 是否如預期生效。未套用任何 Hotword 時為空字串 |
 
-### 4.3 時間戳語義的重要警告 〔現行〕
+上表之外，回應**恆含**字級對齊的三個欄位（`segments[].aligned`、`segments[].words`、根層 `alignment`），見 §4.4。
 
-**`Segment.Start`／`End` 目前是模型自選的切點，不是語音邊界。**
+### 4.3 時間戳語義的重要警告
 
-VibeVoice-ASR 的分段為窮盡連續切分：第一段自 `0.0` 起、模型把整段音訊切滿、段長約 30–40 秒，且**相鄰段的 `End` 與下一段 `Start` 幾乎總是完全相同**。段界與句子邊界無關。
+**`Segment.Start`／`End` 的語義隨 `aligned` 改變。** `aligned` 為 `true` 時是首字與末字的實際發音邊界；為 `false` 時退回下述的切點語義。**混用會得到錯誤結果。**
 
-因此在 ADR-0004 落地前：
+切點語義是這樣的：VibeVoice-ASR 的分段為窮盡連續切分——第一段自 `0.0` 起、模型把整段音訊切滿、段長約 30–40 秒，且**相鄰段的 `End` 與下一段 `Start` 幾乎總是完全相同**。段界與句子邊界無關。
+
+因此對 `aligned: false` 的段落：
 
 - 不可用 `Segment.End − Segment.Start` 推斷「這句話講了多久」
-- 不可用段間間隙推斷停頓——該值目前恆為 0
+- 不可用段間間隙推斷停頓——該值恆為 0
 - `Segment` 不是「一句話」
+
+`aligned: true` 的段落沒有這些限制：段界即實際發音邊界，段間間隙即句間停頓。
 
 此性質已在 `CONTEXT.md` 的 Segment 詞條記載。
 
-### 4.4 成功回應 〔規劃：ADR-0004〕
+### 4.4 成功回應：字級對齊（ADR-0004）
 
-字級強制對齊落地後新增下列欄位，既有欄位形狀不變（向後相容）。
+下列欄位恆存在於回應中。既有欄位形狀不變（向後相容）。
 
 ```jsonc
 {
@@ -160,13 +164,19 @@ VibeVoice-ASR 的分段為窮盡連續切分：第一段自 `0.0` 起、模型�
 |---|---|
 | `segments[].words[]` | 字級時間戳。**中文為單一漢字，不是詞**——「保險經紀人」是五個元素。本系統不做中文斷詞 |
 | `segments[].aligned` | 該段字級時間戳是否可信。`false` 時 `words` 為空陣列，且 `Start`／`End` 退回切點語義 |
-| `alignment.*` | 四個彙總數字，供消費端自行組出評分分母 |
+| `alignment.audio_duration` | 音檔實際總長。**唯一不受對齊狀態影響的彙總值** |
+| `alignment.speech_start`／`speech_end` | **僅計 `aligned: true` 的段落**，見下方警告。無任何段落對齊成功時為 `null` |
+| `alignment.aligned_duration` | 所有 `aligned: true` 段落的時長之和（各段 `End − Start` 相加，不含段間間隙） |
 
 **`aligned` 必須顯式檢查，不可用 `words.length === 0` 代替判斷**——空陣列與「該段沒有字」語義不同。
 
 **`Segment.Start`／`End` 在 `aligned` 為 `true` 與 `false` 時語義不同**：前者是實際發音邊界，後者退回切點。混用會得到錯誤結果。
 
-### 4.5 給評分端的資料使用說明 〔規劃〕
+**`speech_start`／`speech_end` 只看對齊成功的段落。** 未對齊段沒有字級時間戳，其 `Start`／`End` 是切點——而第一段的切點恆為 `0.0`，把它算進去會使 `speech_start` 變成 0，等於宣稱「沒有開頭沉默」。相較之下，跳過未對齊段至少不會產生假資訊。
+
+**代價是：首段或末段未對齊時，這兩個值會高估頭尾沉默，且沒有訊號告訴你發生了。** 跳過未對齊的首段使 `speech_start` 取到更晚的段落，而開頭沉默就是 `speech_start` 本身，故值偏大；末段同理使 `audio_duration − speech_end` 偏大。若頭尾沉默對你們的評分重要，請自行檢查 `segments[0].aligned` 與 `segments[-1].aligned`。
+
+### 4.5 給評分端的資料使用說明
 
 本系統**不判定停頓、不定義閾值、不預先排除任何區間**。閾值與評分規則屬 AI_practise 的業務邏輯（ADR-0004 決策）。
 
@@ -182,7 +192,9 @@ VibeVoice-ASR 的分段為窮盡連續切分：第一段自 `0.0` 起、模型�
 | 開頭沉默時長 | `speech_start` 本身 |
 | 結尾沉默時長 | `audio_duration − speech_end` |
 
-兩點提醒：
+後四列都用到 `speech_start`／`speech_end`，而**那兩個值只計對齊成功的段落**（§4.4 末段的警告）。首段或末段未對齊時，頭尾沉默會被**高估**。
+
+三點提醒：
 
 **開頭沉默通常該計入。** 按下錄音後遲遲不開口本身即話術缺失，排除它等於允許學員先發呆再開始而不受懲罰。
 
@@ -232,7 +244,9 @@ VibeVoice-ASR 的分段為窮盡連續切分：第一段自 `0.0` 起、模型�
 
 | 情況 | 行為 |
 |---|---|
-| 音訊有效但完全無語音 | `segments` 為空陣列，`duration` 為 `0.0`，HTTP 200。〔規劃〕`alignment` 欄位結構完整回傳，值為 `null` 或 `0`，**不報錯** |
+| 音訊有效但完全無語音 | `segments` 為空陣列，`duration` 為 `0.0`，HTTP 200。`alignment` 欄位結構完整回傳（`audio_duration` 為音檔實際長度，`speech_start`／`speech_end` 為 `null`，`aligned_duration` 為 `0`），**不報錯** |
+| 對齊服務不可用或逾時 | **HTTP 200**，逐字稿照常回傳，全段 `aligned: false`、`words` 為空、`Start`／`End` 維持切點語義。不回 502／504——逐字稿有獨立價值，不因評分這項附加功能失效而一併不可得 |
+| 單段對齊未通過合理性檢查 | 該段 `aligned: false`、`words` 為空、`Start`／`End` 退回切點，**其餘段照常**。攔下的型態：單字時長異常（小於模型的 80ms 時間解析度或超過 2 秒）、時間戳逆轉、時間戳落在該段音訊範圍外、對齊跨距不足該段長度的一半（此項不套用於首段與末段——頭尾沉默會壓低跨距，那是預期情境而非故障）、`Start` 與 `End` 相同的零長度段落 |
 | 模型輸出非 JSON | `segments` 為空，`transcription_only` 為繁化後的原始文字，`raw_text` 保留原樣，HTTP 200 |
 | 模型輸出缺欄位 | 缺 `Start`／`End` 補 `0.0`，缺 `Speaker`／`Content` 補空字串，不報錯 |
 | 模型改用 `Start time` 等鍵名 | 自動相容（三重 fallback：`Start`／`start`／`Start time`） |
@@ -254,32 +268,54 @@ curl -X POST http://10.2.66.102:8088/api/asr/transcribe \
   -F "replace_context=false"
 ```
 
-### 成功回應 〔現行〕
+### 成功回應
 
-```json
+刻意示範兩種狀態：第一段對齊成功，第二段未通過合理性檢查。
+
+```jsonc
 {
   "segments": [
     {
-      "Start": 0.0,
-      "End": 39.57,
+      "Start": 0.42,              // 首字實際發音起點
+      "End": 38.91,               // 末字實際發音終點
       "Speaker": "0",
-      "Content": "王安蓮您好，我是服務於好棒棒保險經紀人股份有限公司的王大明。"
+      "Content": "王安蓮您好，我是服務於好棒棒保險經紀人股份有限公司的王大明。",
+      "aligned": true,
+      "words": [
+        { "Text": "王", "Start": 0.42, "End": 0.58 },
+        { "Text": "安", "Start": 0.58, "End": 0.71 }
+        // …其餘各字。注意標點不產生 Word，故數量少於 Content 的字元數
+      ]
     },
     {
-      "Start": 39.57,
+      "Start": 39.57,             // 未通過檢查，退回切點語義
       "End": 76.16,
       "Speaker": "0",
-      "Content": "先已完成並瞭解風險屬性評估結果及確認本商品滿足需求。"
+      "Content": "先已完成並瞭解風險屬性評估結果及確認本商品滿足需求。",
+      "aligned": false,
+      "words": []
     }
   ],
   "raw_text": "[{\"Start\":0.0,\"End\":39.57,\"Speaker\":0,\"Content\":\"王安莲您好…\"}]",
   "transcription_only": "王安蓮您好，我是服務於好棒棒保險經紀人股份有限公司的王大明。先已完成並瞭解風險屬性評估結果及確認本商品滿足需求。",
   "duration": 76.16,
-  "applied_context": "安聯人壽、變額萬能壽險、躉繳"
+  "applied_context": "安聯人壽、變額萬能壽險、躉繳",
+  "alignment": {
+    "audio_duration": 78.30,      // 音檔實際總長
+    "speech_start": 0.42,
+    "speech_end": 38.91,          // 僅計 aligned 的段落
+    "aligned_duration": 38.49
+  }
 }
 ```
 
-注意兩段的 `39.57` 完全相同——這即 4.3 描述的切點語義。
+三處值得注意：
+
+第二段的 `39.57` 與第一段原切點相同——這即 §4.3 描述的切點語義，`aligned: false` 時仍是它。
+
+`speech_end` 為 `38.91` 而非 `76.16`：第二段未對齊，其時間戳是切點而非發音邊界，混入彙總會使該值失去意義。若採 `aligned_duration` 以外的分母，**須自行排除 `aligned: false` 的段落**。
+
+`raw_text` 保留模型原始輸出（含簡體與原切點），不隨對齊改變。
 
 ### 錯誤回應
 
@@ -297,6 +333,6 @@ curl -X POST http://10.2.66.102:8088/api/asr/transcribe \
 ## 8. 相關文件
 
 - ADR-0003：消費端 REST 契約的決策與取捨
-- ADR-0004：字級強制對齊的決策，含本文〔規劃〕欄位的完整理由
+- ADR-0004：字級強制對齊的決策，含 §4.4 各欄位與合理性檢查的完整理由
 - `CONTEXT.md`：Segment、Word、Forced alignment、對齊狀態的詞彙定義
 - `docs/asr-testing.md`：本機與遠端的測試環境架設

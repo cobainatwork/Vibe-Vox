@@ -10,8 +10,11 @@ services:
     environment:
       VIBE_VOX_FRONTEND_ORIGINS: "http://localhost"
       VIBE_VOX_ASR_BASE_URL: "http://vllm:8000"
+      VIBE_VOX_ALIGNER_BASE_URL: "http://aligner:9100"
       VIBE_VOX_TTS_BASE_URL: "http://tts:9000"
     depends_on:
+      # 刻意只依賴 vllm。aligner 不列入：它不可用時 ASR 逐字稿仍須照常回傳，
+      # 硬依賴會讓 ADR-0004 的第二層降級失效。
       vllm:
         condition: service_started
     networks:
