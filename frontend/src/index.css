@@ -381,6 +381,38 @@ body {
   white-space: nowrap;
 }
 
+/* 對齊狀態沿用既有的就緒／未就緒色彩語彙：teal 為正常、amber 為需注意。
+   命名不用 .asr-aligned——那是以布林的其中一個值當 block 名，CONTEXT.md 的
+   「對齊狀態」詞條明列該避免只描述一種值的命名。 */
+.asr-align-status {
+  font-family: var(--mono);
+  color: var(--ready);
+  white-space: nowrap;
+}
+
+.asr-align-status--unaligned {
+  color: var(--down);
+}
+
+.asr-align-status__toggle {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+/* 逐字項目橫向排列並換行：單段 100–200 字時，一字一列會撐開整頁。 */
+.asr-words {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin: 0;
+  padding: 8px 0;
+  list-style: none;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .asr-actions {
   display: flex;
   gap: 12px;
