@@ -4,6 +4,8 @@
 測試用的異常型態取自 #26 的真實實測案例，不是假想的。
 """
 
+import logging
+
 from vibe_vox.adapters.base import Segment, Word
 from vibe_vox.alignment import find_word_defect, merge_alignment
 
@@ -163,6 +165,40 @@ def test_empty_words_fail_check():
     # #27 的 adapter 對退化段落回空清單（空 Content、切片落在音檔外）。無從驗證
     # 即不可信，且下游無法據以重算段界。
     assert find_word_defect([], span=4.0, bounds=(0.0, 4.0)) is not None
+
+
+def test_merge_skips_per_segment_logging_when_the_aligner_failed(caplog):
+    # 對齊服務整體失敗時全段的 words 都是空的，逐段記「字級清單為空」會產生 N 條完全
+    # 相同的訊息（#36 實測 63 條），把端點層那條真正的原因推出畫面：診斷時要往上翻 63
+    # 行才看得到（#37）。段落仍須標記為未對齊，只是不重複記錄同一件事。
+    segments = [
+        Segment(Start=0.0, End=1.0, Speaker="0", Content="你好"),
+        Segment(Start=1.0, End=2.0, Speaker="0", Content="再見"),
+    ]
+
+    with caplog.at_level(logging.WARNING, logger="vibe_vox.alignment"):
+        aligned, _ = merge_alignment(
+            segments,
+            [[], []],
+            audio_duration=2.0,
+            slice_buffer=0.5,
+            aligner_failed=True,
+        )
+
+    assert caplog.text == ""
+    assert [s.aligned for s in aligned] == [False, False]
+
+
+def test_merge_still_logs_empty_words_when_the_aligner_succeeded(caplog):
+    # 互補守衛：個別段落的空清單值得記，可能是「該段全是標點」，也可能是 adapter 剔除了
+    # 退化段落或非語音標記段（#38）。只有服務整體失敗才是雜訊，兩者不可混為一談，否則
+    # #34 移除 `and words` 條件的理由就被抵銷掉了。
+    segments = [Segment(Start=0.0, End=1.0, Speaker="0", Content="。")]
+
+    with caplog.at_level(logging.WARNING, logger="vibe_vox.alignment"):
+        merge_alignment(segments, [[]], audio_duration=1.0, slice_buffer=0.5)
+
+    assert "empty_words" in caplog.text
 
 
 def test_merge_recomputes_segment_bounds_from_words():

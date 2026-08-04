@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import logging
 import wave
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -161,6 +162,49 @@ def test_transcribe_returns_word_level_alignment(tmp_path):
         "speech_end": 0.90,
         "aligned_duration": 0.48,
     }
+
+
+def test_batch_size_setting_reaches_the_real_aligner_client(tmp_path, monkeypatch):
+    # 設定若沒接到 client 上，env var 會**靜默無效**：client 的預設值恰好等於設定的預設
+    # 值，故漏接不表現為任何症狀，直到有人真的去設它才會撞 400（#35 那類失效）。
+    #
+    # 斷言私有屬性是刻意的取捨：client 沒有對外揭露該值的介面，而唯一的行為性 seam
+    # （送出的請求數）需要注入 transport，本工廠不接受。漏接的代價大於這點耦合。
+    monkeypatch.setenv("VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS", "8")
+    app = create_app(settings=Settings(db_path=tmp_path / "t.db"))
+
+    assert app.state.aligner_client._max_batch_items == 8
+
+
+def test_transcribe_logs_the_service_reason_without_repeating_it_per_segment(
+    tmp_path, caplog
+):
+    # #36 的實測 log 是一條服務層級的訊息後面跟著 63 條完全相同的「字級清單為空」，
+    # 真正的原因被推出畫面，診斷時要往上翻 63 行才看得到。端點層知道「服務整體失敗」
+    # 這個事實，須把它傳給 merge_alignment 以免逐段重複同一件事（#37）。
+    result = TranscriptionResult(
+        segments=[
+            Segment(Start=0.0, End=1.0, Speaker="0", Content="你好"),
+            Segment(Start=1.0, End=2.0, Speaker="0", Content="再見"),
+        ],
+        raw_text="你好再見",
+        transcription_only="你好再見",
+        duration=2.0,
+    )
+    unavailable = AlignerUnavailable(
+        "HTTP 400 BATCH_TOO_LARGE：單次 63 段超過上限 32 段，請分批送。"
+    )
+    client = _client(tmp_path, result, aligner_client=_RaisingAligner(unavailable))
+
+    with caplog.at_level(logging.WARNING):
+        resp = client.post(
+            "/api/asr/transcribe",
+            files={"file": ("a.wav", b"RIFF\x00\x00\x00\x00WAVE", "audio/wav")},
+        )
+
+    assert resp.status_code == 200
+    assert "BATCH_TOO_LARGE" in caplog.text
+    assert "字級清單為空" not in caplog.text
 
 
 @pytest.mark.parametrize("exc", [AlignerUnavailable(), AlignerTimeout()])

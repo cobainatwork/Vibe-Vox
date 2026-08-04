@@ -12,6 +12,10 @@ services:
       VIBE_VOX_ASR_BASE_URL: "http://vllm:8000"
       VIBE_VOX_ALIGNER_BASE_URL: "http://aligner:9100"
       VIBE_VOX_TTS_BASE_URL: "http://tts:9000"
+      # **同一個表示式必須寫在 bff 與 aligner 兩處**，由 .env 單點覆寫，兩邊才不會分歧
+      # （分歧的症狀見 bff/src/vibe_vox/adapters/aligner.py 的 DEFAULT_MAX_BATCH_ITEMS）。
+      # bff/tests/test_config.py 會讀本檔確認兩處都佈線且值相同。
+      VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS: "${VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS:-32}"
     volumes:
       # SQLite 單檔的家。不掛則資料只在容器可寫層，起新容器即遺失（#33，見
       # docs/spec.md 的「持久化」）。掛載點與 VIBE_VOX_DB_PATH 定義於 bff/Dockerfile。
@@ -64,6 +68,9 @@ services:
     build:
       context: .
       dockerfile: docker/aligner.Dockerfile
+    environment:
+      # 與 bff 同一個表示式，理由見該處註解（#36）。
+      VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS: "${VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS:-32}"
     networks:
       - vibe
     restart: unless-stopped
