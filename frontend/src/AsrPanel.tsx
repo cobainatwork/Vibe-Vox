@@ -1,11 +1,75 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 
-import { transcribe, type AsrResult } from "./asr";
+import { transcribe, type AsrResult, type AsrSegment } from "./asr";
 import { findBlockingService, type Health } from "./health";
 
 type View = "segments" | "text" | "raw";
 
 const MAX_DURATION_SECONDS = 60 * 60;
+
+function SegmentRow({
+  segment,
+  index,
+  expanded,
+  onToggleWords,
+}: {
+  segment: AsrSegment;
+  index: number;
+  expanded: boolean;
+  onToggleWords: () => void;
+}) {
+  const wordsId = `asr-words-${index}`;
+  // 顯式檢查 aligned，不以 words 是否為空代替判斷（docs/api/asr.md §4.4）：未對齊段
+  // 的時間戳不可信，不該給查閱入口。
+  const canExpand = segment.aligned && segment.words.length > 0;
+
+  return (
+    <Fragment>
+      <tr>
+        <td>{segment.Start.toFixed(2)}</td>
+        <td>{segment.End.toFixed(2)}</td>
+        <td>{segment.Speaker}</td>
+        <td>{segment.Content}</td>
+        <td
+          className={
+            segment.aligned
+              ? "asr-align-status"
+              : "asr-align-status asr-align-status--unaligned"
+          }
+        >
+          {segment.aligned ? "已對齊" : "未對齊"}
+          {canExpand && (
+            <button
+              className="hw-link asr-align-status__toggle"
+              type="button"
+              aria-expanded={expanded}
+              aria-controls={wordsId}
+              onClick={onToggleWords}
+            >
+              字級 {segment.words.length} 字
+            </button>
+          )}
+        </td>
+      </tr>
+      {/* 未展開時完全不渲染，而非以 CSS 隱藏：字級資料量大（技術上限下逾萬個
+          Word），放進 DOM 就已經付了成本。逐段摺疊使實際渲染量降到單段的量級
+          （30–40 秒段落約 100–200 字），無需虛擬滾動。 */}
+      {expanded && (
+        <tr>
+          <td colSpan={5}>
+            <ul className="asr-words" id={wordsId}>
+              {segment.words.map((w, i) => (
+                <li key={i}>
+                  {`${w.Text} ${w.Start.toFixed(2)}–${w.End.toFixed(2)}`}
+                </li>
+              ))}
+            </ul>
+          </td>
+        </tr>
+      )}
+    </Fragment>
+  );
+}
 
 export function AsrPanel({ health }: { health: Health | null }) {
   const [file, setFile] = useState<File | null>(null);
@@ -17,6 +81,7 @@ export function AsrPanel({ health }: { health: Health | null }) {
   const [elapsedMs, setElapsedMs] = useState<number | null>(null);
   const [view, setView] = useState<View>("segments");
   const [copyNote, setCopyNote] = useState<string | null>(null);
+  const [expandedSegments, setExpandedSegments] = useState<Set<number>>(new Set());
 
   const blocking = findBlockingService("asr", health);
 
@@ -26,6 +91,8 @@ export function AsrPanel({ health }: { health: Health | null }) {
     setError(null);
     setResult(null);
     setCopyNote(null);
+    // 展開狀態以段落索引記錄，而不同結果的同一索引毫無關係。
+    setExpandedSegments(new Set());
     const start = performance.now();
     try {
       const terms = extraTerms
@@ -44,6 +111,18 @@ export function AsrPanel({ health }: { health: Health | null }) {
     } finally {
       setLoading(false);
     }
+  };
+
+  const toggleWords = (index: number) => {
+    setExpandedSegments((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) {
+        next.delete(index);
+      } else {
+        next.add(index);
+      }
+      return next;
+    });
   };
 
   const copyText = async () => {
@@ -76,6 +155,11 @@ export function AsrPanel({ health }: { health: Health | null }) {
   };
 
   const overLong = result != null && result.duration > MAX_DURATION_SECONDS;
+  // 對齊服務不可用時 ASR 仍回 200 與完整逐字稿、全段標記未對齊（ADR-0004 的第二層
+  // 降級），故服務故障不會表現為錯誤訊息。此處把它拉成整體警示，否則要滾完整份
+  // 逐字稿才看得出來。segments 為空（無語音）時不算——沒有段落談不上未對齊。
+  const noneAligned =
+    result != null && result.segments.length > 0 && result.segments.every((s) => !s.aligned);
 
   return (
     <section className="panel">
@@ -131,6 +215,12 @@ export function AsrPanel({ health }: { health: Health | null }) {
               辨識耗時與品質可能受影響。
             </p>
           )}
+          {noneAligned && (
+            <p className="panel__warn">
+              本次所有段落均未對齊，時間戳仍是模型自選的切點而非發音邊界。可能是對齊
+              服務未就緒，或逐字稿品質不足以支撐對齊。
+            </p>
+          )}
           <p className="panel__note">
             本次套用詞彙：{result.applied_context || "（無）"}
             {elapsedMs != null && ` · 耗時 ${(elapsedMs / 1000).toFixed(1)} 秒`}
@@ -181,16 +271,18 @@ export function AsrPanel({ health }: { health: Health | null }) {
                     <th>結束</th>
                     <th>語者</th>
                     <th>內容</th>
+                    <th>對齊</th>
                   </tr>
                 </thead>
                 <tbody>
                   {result.segments.map((s, i) => (
-                    <tr key={i}>
-                      <td>{s.Start.toFixed(2)}</td>
-                      <td>{s.End.toFixed(2)}</td>
-                      <td>{s.Speaker}</td>
-                      <td>{s.Content}</td>
-                    </tr>
+                    <SegmentRow
+                      key={i}
+                      segment={s}
+                      index={i}
+                      expanded={expandedSegments.has(i)}
+                      onToggleWords={() => toggleWords(i)}
+                    />
                   ))}
                 </tbody>
               </table>

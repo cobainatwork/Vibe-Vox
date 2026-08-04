@@ -11,11 +11,26 @@ afterEach(() => vi.unstubAllGlobals());
 describe("transcribe", () => {
   it("posts multipart file 到 /api/asr/transcribe，回結果（不套 {data} 信封）", async () => {
     const result = {
-      segments: [{ Start: 0, End: 1.2, Speaker: "A", Content: "你好" }],
+      segments: [
+        {
+          Start: 0,
+          End: 1.2,
+          Speaker: "A",
+          Content: "你好",
+          aligned: false,
+          words: [],
+        },
+      ],
       raw_text: "你好",
       transcription_only: "你好",
       duration: 1.2,
       applied_context: "",
+      alignment: {
+        audio_duration: 1.5,
+        speech_start: null,
+        speech_end: null,
+        aligned_duration: 0,
+      },
     };
     const fetchMock = mockFetch(result);
     vi.stubGlobal("fetch", fetchMock);
@@ -39,6 +54,12 @@ describe("transcribe", () => {
       transcription_only: "",
       duration: 0,
       applied_context: "",
+      alignment: {
+        audio_duration: 0,
+        speech_start: null,
+        speech_end: null,
+        aligned_duration: 0,
+      },
     });
     vi.stubGlobal("fetch", fetchMock);
     const file = new File(["x"], "a.wav");
