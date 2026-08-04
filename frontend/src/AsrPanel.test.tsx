@@ -226,13 +226,26 @@ describe("AsrPanel", () => {
     expect(screen.queryByRole("button", { name: /字級/ })).not.toBeInTheDocument();
   });
 
-  it("音檔超過 60 分鐘顯示提示", async () => {
-    mockedApi.transcribe.mockResolvedValue({ ...RESULT, duration: 3700 });
+  it("音檔超過建議長度上限時顯示提示", async () => {
+    // 上限由 asr_timeout 決定（約 20 分鐘），不是模型的 61 分鐘。原本此處寫 60 分鐘，
+    // 比實際上限大一個數量級，會讓操作者以為長音檔可用（#35）。
+    mockedApi.transcribe.mockResolvedValue({ ...RESULT, duration: 1500 });
     render(<AsrPanel health={READY} />);
     upload();
 
     fireEvent.click(screen.getByRole("button", { name: "送出辨識" }));
 
-    expect(await screen.findByText(/超過 60 分鐘/)).toBeInTheDocument();
+    expect(await screen.findByText(/20 分鐘/)).toBeInTheDocument();
+  });
+
+  it("音檔在建議長度內不顯示提示", async () => {
+    // 防假警示：實際負載是回合制對話的 1–2 分鐘，不該每次都跳警告。
+    mockedApi.transcribe.mockResolvedValue({ ...RESULT, duration: 120 });
+    render(<AsrPanel health={READY} />);
+    upload();
+    fireEvent.click(screen.getByRole("button", { name: "送出辨識" }));
+    await screen.findByText("你好");
+
+    expect(screen.queryByText(/20 分鐘/)).not.toBeInTheDocument();
   });
 });

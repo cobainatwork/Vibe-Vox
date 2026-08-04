@@ -18,6 +18,14 @@ def _parse_origins(raw: str) -> list[str]:
     return [o.strip() for o in raw.split(",") if o.strip()]
 
 
+# 重量級端點的總體 guard 相對「各子系統逾時之和」的餘裕倍數。
+#
+# 和本身只涵蓋轉碼、辨識與對齊，但 guard 還包住 200 MB 級的上傳讀取、wav 長度讀取
+# 與送 vLLM 前的 base64 編碼。無餘裕時 guard 可能先於 asr_timeout 觸發，使用者拿到
+# 籠統的 REQUEST_TIMEOUT 而非精確的 ASR_TIMEOUT，違反「內層先觸發」的順序（#35）。
+HEAVY_GUARD_MARGIN = 1.2
+
+
 @dataclass(frozen=True)
 class Settings:
     # 嚴格 CORS/Origin 白名單：僅允許前端 Origin，不開放萬用字元。
@@ -74,8 +82,24 @@ class Settings:
         default_factory=_env("VIBE_VOX_ASR_SERVED_NAME", "vibevoice", str)
     )
     # 呼叫遠端 ASR 的逾時（秒）：涵蓋網路 + 模型推論，較 ffmpeg 寬。
+    #
+    # **此值直接決定可用的音檔長度上限**，與 docs/api/asr.md 記載的模型上限（61 分鐘）
+    # 無關。vllm_asr 的 max_tokens = duration*10 + 100，而實測生成速度約 50 tokens/s，
+    # 故 T 秒的逾時約支援 T*5.35 秒的音檔（依 214 秒音檔／850 字／約 40 秒的實測比例）。
+    #
+    # 原值 120 只到約 10.7 分鐘，10 分鐘的會議錄音即卡在邊界（#35）。300 秒約 26 分鐘，
+    # 覆蓋管理平面的測試情境；實際負載是回合制對話的 1–2 分鐘，遠低於此。
+    #
+    # 不設更大：61 分鐘需要約 750 秒，而長逾時會讓掛住的請求佔住 GPU 與連線。
+    #
+    # **改此值要同步三處。** 只有第 1 項有測試保護（`test_config.py` 的
+    # `test_reverse_proxy_timeout_exceeds_heavy_guard` 會實際去讀 nginx.conf），
+    # 另兩項只能靠這條註解：
+    #   1. frontend/nginx.conf 的 proxy_read_timeout（須大於 heavy_request_budget）
+    #   2. frontend/src/AsrPanel.tsx 的 MAX_DURATION_SECONDS（操作者看到的警示閾值）
+    #   3. docs/api/asr.md §3.3 的「音訊長度（實際可用）」與 §5 的 ASR_TIMEOUT 列
     asr_timeout_seconds: float = field(
-        default_factory=_env("VIBE_VOX_ASR_TIMEOUT_SECONDS", "120", float)
+        default_factory=_env("VIBE_VOX_ASR_TIMEOUT_SECONDS", "300", float)
     )
     # 字級強制對齊服務位址；預設對齊 compose 的 aligner 服務（內部服務，不對外映射）。
     aligner_base_url: str = field(
@@ -102,3 +126,15 @@ class Settings:
     ffmpeg_timeout_seconds: float = field(
         default_factory=_env("VIBE_VOX_FFMPEG_TIMEOUT_SECONDS", "60", float)
     )
+
+    def heavy_request_budget(self) -> float:
+        """重量級端點（轉碼＋辨識＋對齊）的總體逾時預算。
+
+        端點與測試都用這個方法，不各自重算：否則某天多一個子系統時，端點加了而
+        測試沒加，那條「內層先觸發」的保證就悄悄失效。餘裕見 HEAVY_GUARD_MARGIN。
+        """
+        return (
+            self.asr_timeout_seconds
+            + self.ffmpeg_timeout_seconds
+            + self.aligner_timeout_seconds
+        ) * HEAVY_GUARD_MARGIN

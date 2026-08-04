@@ -44,9 +44,20 @@ export type TranscribeOptions = {
   replaceContext?: boolean;
 };
 
+// 音檔長度的建議上限（秒）。由 BFF 的 asr_timeout（300 秒）決定而非模型的 61 分鐘：
+// max_tokens = 秒數×10 + 100，實測生成速度約 50 tokens/s，故最壞情況下 300 秒只容得下
+// 約 1490 秒。此處取 1200 留餘裕給 base64 編碼、prefill 與傳輸：設在打平點的警示等於
+// 不警示（#35）。
+export const MAX_AUDIO_SECONDS = 20 * 60;
+
 async function errorMessage(resp: Response, fallback: string): Promise<string> {
   const body = await resp.json().catch(() => null);
-  return body?.error?.message ?? `${fallback}：HTTP ${resp.status}`;
+  const message = body?.error?.message ?? `${fallback}：HTTP ${resp.status}`;
+  if (resp.status !== 504) return message;
+  // 逾時的後端訊息不含「音檔太長」這個脈絡，操作者看到「逾時」不會想到要裁切。
+  // 而超過上限的音檔正是永遠拿不到成功回應的那些，事後的長度警示救不到它們。
+  const limit = Math.round(MAX_AUDIO_SECONDS / 60);
+  return `${message}（音檔超過約 ${limit} 分鐘時常見此結果，請裁切後重試）`;
 }
 
 export async function transcribe(

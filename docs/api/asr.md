@@ -71,7 +71,18 @@ BFF 有一層 Origin 防護（`OriginGuardMiddleware`），規則是「來源存
 |---|---|---|
 | nginx 請求體 | 210 MB | **nginx 直接回 413，非本 API 的 JSON 錯誤信封** |
 | BFF 音檔上限 | 200 MB（`209715200` bytes） | 400 系列 JSON：413 `FILE_TOO_LARGE` |
-| 模型音訊長度 | 61 分鐘（vLLM plugin 的 `VIBEVOICE_MAX_AUDIO_DURATION`，預設 3660 秒） | 502 `ASR_UNAVAILABLE` |
+| **音訊長度（建議上限）** | **約 20 分鐘** | 504 `ASR_TIMEOUT` 或 `REQUEST_TIMEOUT` |
+| 音訊長度（模型技術上限） | 61 分鐘（vLLM plugin 的 `VIBEVOICE_MAX_AUDIO_DURATION`，預設 3660 秒） | 達不到，見下 |
+
+**注意後兩列長度限制的差別。** 61 分鐘是模型能吃的上限，但**系統實際到不了那裡**：辨識逾時（`VIBE_VOX_ASR_TIMEOUT_SECONDS`，預設 300 秒）會先觸發。
+
+換算方式：BFF 依音檔長度設 `max_tokens = 秒數 × 10 + 100`，而實測生成速度約 50 tokens/s。模型輸出達 `max_tokens` 上限時（最壞情況），T 秒的逾時只容得下 `5T − 10` 秒的音檔，故 300 秒對應約 1490 秒。
+
+**建議上限取 20 分鐘而非 24.8 分鐘**：後者是打平點，生成恰好用完整個逾時，沒有餘裕給 base64 編碼、prefill 與傳輸。實測上模型通常不會輸出到上限（214 秒的音檔約用 40 秒生成，即比例約 5.35 而非 5.0），所以 20 到 25 分鐘之間是「可能成功也可能 504」的灰帶。
+
+要支援 61 分鐘需把逾時調到約 750 秒，但長逾時會讓掛住的請求佔住 GPU 與連線，而實際負載是回合制對話的 1 至 2 分鐘，故未如此設定（#35）。
+
+實務上：**1 至 2 分鐘的回合制對話遠在安全範圍內**。管理平面用長音檔測試時才需要留意這條線。超限時的 504 訊息會附上長度提示。
 
 **注意第一列**：超過 210 MB 的請求在到達 BFF 前就被 nginx 擋下，你們收到的會是 nginx 的預設錯誤頁（HTML）而不是 `{"error":{...}}`。解析回應時需容忍這個例外——建議以 `Content-Type` 判斷再決定是否解析 JSON。
 
@@ -221,9 +232,9 @@ BFF 有一層 Origin 防護（`OriginGuardMiddleware`），規則是「來源存
 | 413 | `CONTEXT_BUDGET_EXCEEDED` | Hotword context 估算 token 超過預算（預設 8000）。`message` 含實際值與上限 |
 | 502 | `ASR_UNAVAILABLE` | 模型服務連不上、回非 2xx、或回應信封異常（`choices` 空、`content` 為 null） |
 | 503 | `TOO_MANY_REQUESTS` | 重量級請求達併發上限（預設 8）。**不排隊，直接 load-shed**，可重試 |
-| 504 | `ASR_TIMEOUT` | 模型服務回應逾時（預設 120 秒，`VIBE_VOX_ASR_TIMEOUT_SECONDS`） |
+| 504 | `ASR_TIMEOUT` | 模型服務回應逾時（預設 300 秒，`VIBE_VOX_ASR_TIMEOUT_SECONDS`）。**這是音檔長度的實際上限所在**，見 §3.3 |
 | 504 | `TRANSCODE_TIMEOUT` | ffmpeg 轉碼逾時（預設 60 秒） |
-| 504 | `REQUEST_TIMEOUT` | 總體護欄逾時（涵蓋轉碼＋辨識，上限為兩者之和） |
+| 504 | `REQUEST_TIMEOUT` | 總體護欄逾時（涵蓋轉碼、辨識與對齊，上限為三者之和，預設 420 秒） |
 
 錯誤形狀一律為：
 
