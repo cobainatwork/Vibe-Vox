@@ -12,6 +12,12 @@ services:
       VIBE_VOX_ASR_BASE_URL: "http://vllm:8000"
       VIBE_VOX_ALIGNER_BASE_URL: "http://aligner:9100"
       VIBE_VOX_TTS_BASE_URL: "http://tts:9000"
+    volumes:
+      # SQLite 單檔的家。不掛則資料只在容器可寫層，起新容器即遺失（#33，見
+      # docs/spec.md 的「持久化」）。掛載點與 VIBE_VOX_DB_PATH 定義於 bff/Dockerfile。
+      # **不要在此覆寫 VIBE_VOX_DB_PATH**：指到 /data 之外會讓資料靜默回到可寫層，
+      # volume 照掛但沒人用，且不會報錯。
+      - bff_data:/data
     depends_on:
       # 刻意只依賴 vllm。aligner 不列入：它不可用時 ASR 逐字稿仍須照常回傳，
       # 硬依賴會讓 ADR-0004 的第二層降級失效。
@@ -76,3 +82,9 @@ services:
 networks:
   vibe:
     driver: bridge
+
+volumes:
+  # 具名 volume 而非 bind mount：資料由 Docker 管理，不依賴宿主的目錄結構與權限。
+  # 注意實際名稱是 `<project>_bff_data`，而 project 名預設取自本目錄名——搬動 repo
+  # 或設 COMPOSE_PROJECT_NAME 會指向另一個（空的）volume。
+  bff_data:

@@ -176,14 +176,40 @@ blocking edges 已串好（#26 → #27 → #28 → #29），#26 已關，#27 解
 - **架構**：docker compose 五部署單元 — bff(FastAPI) + frontend(nginx，對外 **8088**) + vllm(VibeVoice-ASR，GPU) + **aligner**(Qwen3-ForcedAligner，GPU，埠 9100) + tts(profile，未啟用)
 - **遠端 GPU 機**：`http://10.2.66.102:8088`
 - **rebuild**：`git pull && docker compose build aligner && docker compose up -d aligner`。只 build 需要的服務，vllm image 裡 bake 了 7B 權重，沒必要跟著重建
+- **資料庫在 volume `bff_data`（掛到 bff 的 `/data`）**，故 rebuild 不再清空 Hotword（#33 修正前會，且實際發生過數次）
 - **本機（Windows）**：可跑 stub e2e，也可 `docker build`（不需 GPU）與 `VIBE_VOX_ALIGNER_DEVICE=cpu` 的完整對齊驗證
 - **模型權重**：`microsoft/VibeVoice-ASR`（非 -HF）bake 在 `docker/vllm.Dockerfile`，served-name `vibevoice`；`Qwen/Qwen3-ForcedAligner-0.6B` bake 在 `docker/aligner.Dockerfile`
 
-### 6.1 改名的殘留風險
+### 6.1 首次部署 #33 的修正：先匯出，否則現有 Hotword 會消失
+
+**這一步只在從 #33 之前的版本升級時需要，但漏掉就沒有第二次機會。** 舊版的 DB 在容器可寫層的 `/app/var/vibe_vox.db`，新版讀的是 volume 裡的 `/data/vibe_vox.db`。套用修正時容器必然重建，舊路徑的資料不會自動搬過去，而是隨舊容器層消失。
+
+```bash
+# 1. 在「還沒 pull」的舊容器上匯出
+curl -o hotwords-backup.json http://10.2.66.102:8088/api/admin/hotwords/export?format=json
+# 2. 部署
+git pull && docker compose build bff && docker compose up -d bff
+# 3. 匯回
+curl -X POST -F "file=@hotwords-backup.json" http://10.2.66.102:8088/api/admin/hotwords/import
+```
+
+若遠端目前的清單已經是空的（先前的 rebuild 已清掉），第 1 步與第 3 步可略過。
+
+**若 bff 起不來且 log 出現 `Permission denied`**：多半是 volume 早於本次 image 就存在（曾手動 `docker volume create`，或曾以無 `/data` 的舊 image 掛過同名 volume）。此時該 volume 的 owner 已定為 root，Dockerfile 的 `chown` 不會再被繼承——需先 `docker compose down && docker volume rm <project>_bff_data` 再起（該 volume 若已有資料，先按上面第 1 步匯出）。
+
+### 6.2 修正後仍會刪掉資料的操作
+
+- **`docker compose down -v`**——`-v` 就是刪 volume 的意思。日常停服務用 `down` 或 `stop`，不要加 `-v`
+- **`docker volume prune`／`docker system prune --volumes`**——容器已停或已移除時，這兩個會把 volume 當成無主的一併清掉。這台機器的 image bake 了 7B 權重、磁碟壓力大，清理是高機率動作，執行前先確認 bff 容器還在跑
+- **搬動 repo 目錄或設 `COMPOSE_PROJECT_NAME`**——volume 實際名稱是 `<project>_bff_data`，project 名預設取自目錄名，換名等於指向另一個空 volume
+
+備份一律走 `GET /api/admin/hotwords/export`，不要試圖直接複製 volume 裡的 SQLite 檔（WAL 模式下有 `-wal`／`-shm` 側檔，單獨複製主檔可能拿到不完整的狀態）。
+
+### 6.3 改名的殘留風險
 
 環境變數前綴在 `da08334` 全面改為 `VIBE_VOX_`，**不保留舊前綴的相容 alias**。遠端若有自建 `.env`，裡面的 `VIBE_QWEN_*` 需改名，否則設定失效並退回預設值。Python package 亦由 `vibe_qwen` 改為 `vibe_vox`。日後若從舊備份還原 `.env`，這條會再咬一次。
 
-### 6.2 GPU 拓撲：兩張卡，不是一張
+### 6.4 GPU 拓撲：兩張卡，不是一張
 
 **這推翻了 ADR-0001 與 ADR-0004 共用的前提**，兩份都寫「單張 RTX 6000 Ada 48GB」。實測：
 
@@ -214,7 +240,7 @@ GPU 0 日常負載下餘 5450 MiB。ADR 記 VoxCPM2 約需 8 GiB，但**那是�
 
 ### 7.3 ADR-0001 需重寫
 
-它的整套 VRAM 協調論述建立在「單張卡」之上（見 6.2）。#19 是「新 ADR 取代 ADR-0001」的票，該票須納入兩張卡與第二張被別的專案動態佔用這項事實。本 session 只在 ADR-0004 記了實測，沒動 ADR-0001。
+它的整套 VRAM 協調論述建立在「單張卡」之上（見 6.4）。#19 是「新 ADR 取代 ADR-0001」的票，該票須納入兩張卡與第二張被別的專案動態佔用這項事實。本 session 只在 ADR-0004 記了實測，沒動 ADR-0001。
 
 ### 7.4 payload 放大
 
