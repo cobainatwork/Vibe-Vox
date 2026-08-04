@@ -53,7 +53,22 @@ VibeVoice 的切點時間戳降級為**切片依據**：段長 30–40 秒遠低
 
 ## Consequences
 
-- **三模型共用單張 RTX 6000 Ada 48GB**，更新 ADR-0001 的分配：vLLM 26–29 GB（`gpu_memory_utilization` 0.55–0.6）+ VoxCPM2 約 8 GB + aligner 3–4 GB = 37–41 GB，餘裕 7–11 GB。aligner 的 activation 為估算值而非實測，實作時先量測單段峰值再開 batch。
+- **VRAM 帳已由 #26 實測取代，且推翻本節原有的三項前提**。原文假設「單張 RTX 6000 Ada 48GB，vLLM 26–29 GB（`gpu_memory_utilization` 0.55–0.6）+ VoxCPM2 約 8 GB + aligner 3–4 GB = 37–41 GB，餘裕 7–11 GB」。2026-08-04 於遠端機實測：
+
+  | 項目 | 原假設 | 實測 |
+  |---|---|---|
+  | GPU 數量與容量 | 單張 48 GB | **兩張**，各 46068 MiB |
+  | vLLM | 26–29 GB（utilization 0.55–0.6） | **37890 MiB**（utilization 0.8） |
+  | aligner 峰值 | 3–4 GB（估算） | **2348 MiB**（idle 2186，單段對齊 +162） |
+  | GPU 0 餘裕 | 7–11 GB | **5830 MiB** |
+
+  三項修正：
+
+  **`gpu_memory_utilization` 0.55–0.6 從未被實作。** `docker/vllm.Dockerfile` 直接跑官方 `vllm_plugin/scripts/start_server.py`，該腳本的預設為 `0.8`，未被覆寫，故 vLLM 實際佔 46068 × 0.8 ≈ 36854 MiB（實測 37890，差額為 CUDA context 開銷）。
+
+  **機器有兩張卡，第二張已被非 Vibe-Vox 的工作負載佔用。** GPU 1 由 gpustack 管理的 `qwen3.6-35b-a3b` 與 `gemma-4-12b-it-qat` 佔 33118 MiB（餘 12934 MiB），且為動態調度，不可假設其餘裕穩定。`docker-compose.yml` 目前把三個 GPU 服務全釘在 `device_ids: ["0"]`。
+
+  **VoxCPM2 在當前配置下無法與 vLLM、aligner 並存於 GPU 0**：餘裕 5830 MiB 小於其所需的約 8 GB。aligner 不是瓶頸（實測比估算少 1–2 GB），瓶頸是未設定的 vLLM utilization。此為 TTS 上線的前置阻礙，須先決定是把 vLLM 調回原設計的 0.55–0.6（代價為 KV cache 縮小、影響併發與 `max_model_len`），或改變卡的分配。
 - **ASR 文字品質成為時間戳品質的前置條件**。強制對齊無容錯機制（訓練以 MFA pseudo-label，假設 text 與 audio 完全對應），轉錄若含亂碼、漏字、多字會靜默對歪。故 #23（prompt 對齊訓練格式）由可選優化升格為必要前置。
 - **時間解析度 80ms**（`config.json` 的 `timestamp_segment_time`；模型輸出的離散索引乘以此值即毫秒）。可穩定分辨的最小停頓約 80–160ms；話術評分關心的猶豫、卡頓多在 300ms 以上，故足夠。80ms 以下的微停頓測不出，該尺度屬協同發音範疇，本不應計入評分。
 - **回應體積顯著增加**。中文語速約每分鐘 200–300 字，60 分鐘音檔產生逾萬個 Word 物件，約增 700 KB。上傳上限已為 200 MB，此量級無虞，但消費端須知回應不再是小 JSON。
