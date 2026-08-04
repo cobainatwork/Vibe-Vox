@@ -1,11 +1,12 @@
 import { Fragment, useState } from "react";
 
-import { transcribe, type AsrResult, type AsrSegment } from "./asr";
+import { MAX_AUDIO_SECONDS, transcribe, type AsrResult, type AsrSegment } from "./asr";
 import { findBlockingService, type Health } from "./health";
 
 type View = "segments" | "text" | "raw";
 
-const MAX_DURATION_SECONDS = 60 * 60;
+// 上限定義在 asr.ts（屬 ASR 契約的知識，逾時錯誤訊息也用它）。原本這裡寫 60 分鐘，
+// 比實際上限大一個數量級，會讓操作者以為長音檔可用而撞上 504（#35）。
 
 function SegmentRow({
   segment,
@@ -154,7 +155,7 @@ export function AsrPanel({ health }: { health: Health | null }) {
     URL.revokeObjectURL(url);
   };
 
-  const overLong = result != null && result.duration > MAX_DURATION_SECONDS;
+  const overLong = result != null && result.duration > MAX_AUDIO_SECONDS;
   // 對齊服務不可用時 ASR 仍回 200 與完整逐字稿、全段標記未對齊（ADR-0004 的第二層
   // 降級），故服務故障不會表現為錯誤訊息。此處把它拉成整體警示，否則要滾完整份
   // 逐字稿才看得出來。segments 為空（無語音）時不算——沒有段落談不上未對齊。
@@ -211,8 +212,9 @@ export function AsrPanel({ health }: { health: Health | null }) {
         <div className="asr-result">
           {overLong && (
             <p className="panel__warn">
-              音檔長度 {(result.duration / 60).toFixed(1)} 分鐘，超過 60 分鐘上限，
-              辨識耗時與品質可能受影響。
+              音檔長度 {(result.duration / 60).toFixed(1)} 分鐘，超過建議上限{" "}
+              {Math.round(MAX_AUDIO_SECONDS / 60)} 分鐘。上限由辨識逾時決定（非模型
+              能力），更長的音檔可能在辨識途中被中斷回 504。
             </p>
           )}
           {noneAligned && (

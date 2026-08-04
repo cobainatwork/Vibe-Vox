@@ -81,13 +81,10 @@ async def transcribe(
     enforce_context_budget(context, settings.hotword_context_token_budget)
 
     guard = request.app.state.heavy_guard
-    # guard 涵蓋轉碼 + 辨識 + 對齊，上限設為三者之和，讓各 client 自身的逾時
-    # （→ 504 ASR_TIMEOUT／對齊降級）先觸發，guard 為總體 backstop。
-    async with guard.slot(
-        timeout_seconds=settings.asr_timeout_seconds
-        + settings.ffmpeg_timeout_seconds
-        + settings.aligner_timeout_seconds
-    ):
+    # guard 涵蓋轉碼 + 辨識 + 對齊，且含餘裕（見 config.HEAVY_GUARD_MARGIN），讓各
+    # client 自身的逾時（→ 504 ASR_TIMEOUT／對齊降級）先觸發，guard 為總體 backstop。
+    # 預算由 Settings 計算而非在此相加，測試用同一個方法比對 nginx 的逾時（#35）。
+    async with guard.slot(timeout_seconds=settings.heavy_request_budget()):
         async with intake.transcoded(
             _stream(file), sample_rate=settings.asr_sample_rate
         ) as wav:

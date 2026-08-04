@@ -19,6 +19,15 @@
 .remember/
 .scratch/
 
+# 管理平面「匯出 JSON」的產物。asr-result.json 是 AsrPanel 的預設下載檔名，
+# 任何人從 ASR 測試頁匯出都會在此產生同名檔。它是測試產物且含辨識內容，不進版控。
+# 若某份結果要留存為校準資料（#32），請放 docs/ 並註明音檔來源與量測條件。
+asr-result.json
+
+# HANDOFF.md §1 指示部署前以 export 端點備份 Hotword，這是那些備份檔。
+# 內容是操作者維護的詞彙清單，屬環境資料而非原始碼。
+hotwords-backup.*
+
 # Spike 實驗區。
 # 註：VoxCPM TTS 的 spike harness 在 spike/voxcpm-tts 分支（已 push origin），
 # 不在此目錄——本機這份是殘留。若日後有需要保留的 spike，請放到分支或

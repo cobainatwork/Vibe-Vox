@@ -10,9 +10,9 @@
 遠端連線屬環境相依，測試以 httpx MockTransport 注入假回應。
 """
 
+import asyncio
 import base64
 import json
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +31,11 @@ class AsrTimeout(Exception):
 
 
 _SHOW_KEYS = "Start time, End time, Speaker ID, Content"
+
+# ffprobe 只讀檔頭的 metadata，正常在一秒內完成；30 秒是留給慢速磁碟與 200 MB 級
+# 檔案的餘裕。刻意遠小於 ffmpeg_timeout（60）與 asr_timeout（300）：這一步掛住不該
+# 吃掉整個請求的預算。不進 config：它不是部署會調的值。
+_FFPROBE_TIMEOUT_SECONDS = 30.0
 
 
 def _instruction(duration: float, context: str) -> str:
@@ -58,17 +63,39 @@ def _instruction(duration: float, context: str) -> str:
     return base
 
 
-def _audio_duration(path: Path) -> float:
+async def _audio_duration(path: Path) -> float:
     """以 ffprobe 取音檔秒數（對齊官方 test_api.py），支援各格式；失敗回退 1.0，
-    避免 duration 異常使 max_tokens 過小截斷內容或 prompt 秒數不實。"""
-    cmd = [
-        "ffprobe", "-v", "error", "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1", str(path),
-    ]
+    避免 duration 異常使 max_tokens 過小截斷內容或 prompt 秒數不實。
+
+    以 asyncio 子進程而非 `subprocess.check_output`：後者同步阻塞 event loop，會使
+    guard 的 `asyncio.timeout` 無法觸發：ffprobe 掛住時整個請求只剩反向代理能收尾，
+    使用者拿到 HTML 錯誤頁，而那正是 #35 要消除的結果。逾時亦不可省，`check_output`
+    原本連 `timeout=` 都沒有。
+    """
     try:
-        out = subprocess.check_output(cmd, stderr=subprocess.STDOUT).decode().strip()
-        return float(out)
-    except (subprocess.SubprocessError, ValueError, OSError):
+        proc = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", str(path),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except OSError:
+        return 1.0  # ffprobe 不在 PATH（開發機、精簡 image）：回退而非讓請求失敗
+    try:
+        async with asyncio.timeout(_FFPROBE_TIMEOUT_SECONDS):
+            out, _ = await proc.communicate()
+    except (TimeoutError, asyncio.CancelledError) as exc:
+        proc.kill()
+        await proc.wait()
+        if isinstance(exc, asyncio.CancelledError):
+            raise  # 連線中斷要繼續向上傳播，與 transcode 一致
+        return 1.0
+    if proc.returncode != 0:
+        return 1.0
+    try:
+        return float(out.decode().strip())
+    except ValueError:
         return 1.0
 
 
@@ -175,7 +202,7 @@ class VllmAsrClient:
     async def transcribe(self, audio: Path, *, context: str) -> TranscriptionResult:
         audio_b64 = base64.b64encode(audio.read_bytes()).decode("ascii")
         data_url = f"data:audio/wav;base64,{audio_b64}"
-        duration = _audio_duration(audio)
+        duration = await _audio_duration(audio)
         prompt = _instruction(duration, context)
         payload = {
             "model": self._model,
