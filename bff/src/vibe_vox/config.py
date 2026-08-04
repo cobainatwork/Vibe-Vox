@@ -77,6 +77,21 @@ class Settings:
     asr_timeout_seconds: float = field(
         default_factory=_env("VIBE_VOX_ASR_TIMEOUT_SECONDS", "120", float)
     )
+    # 字級強制對齊服務位址；預設對齊 compose 的 aligner 服務（內部服務，不對外映射）。
+    aligner_base_url: str = field(
+        default_factory=_env("VIBE_VOX_ALIGNER_BASE_URL", "http://aligner:9100", str)
+    )
+    # 呼叫對齊服務的逾時（秒）。實測 32 段（總音訊 1075 秒）耗時 1.4 秒、日常 2–4 段
+    # 約 0.2 秒（ADR-0004），故 60 秒的餘裕主要用於多段 multipart 的傳輸而非推論。
+    aligner_timeout_seconds: float = field(
+        default_factory=_env("VIBE_VOX_ALIGNER_TIMEOUT_SECONDS", "60", float)
+    )
+    # 逐段切片左右各留的 buffer（秒）。VibeVoice 的段界是模型自選切點而非發音邊界，
+    # 可能落在某個字的發音中間；buffer 使邊界字的音訊完整落在切片內。取值依據見
+    # adapters/aligner.py 的 DEFAULT_SLICE_BUFFER_SECONDS。
+    aligner_slice_buffer_seconds: float = field(
+        default_factory=_env("VIBE_VOX_ALIGNER_SLICE_BUFFER_SECONDS", "0.5", float)
+    )
     # 無 GPU 環境（dev）以 stub adapter 回假結果啟動，不連真實模型服務。
     use_stub_models: bool = field(
         default_factory=_env(
