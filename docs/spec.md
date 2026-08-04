@@ -158,6 +158,8 @@ Vibe-Vox 是一個 ASR/TTS 後端服務，同時服務兩類消費者。**消費
 ### 持久化
 
 - 採 SQLite 單檔資料庫（啟用 WAL 模式並設定連線 busy_timeout，約 5000ms，以緩解併發寫入的 database locked／SQLITE_BUSY），儲存 Hotword 與 Voice metadata。參考音檔與合成輸出存於檔案系統的固定資料夾；所有落地檔名一律由伺服器生成 UUID，儲存路徑不得由使用者輸入（含原始檔名、`Voice.name`）推導，`Voice.name` 僅為顯示名稱。
+- **容器化部署須把資料庫置於掛載的 volume，不得留在容器可寫層。** 留在可寫層時任何建立新容器的操作（`docker compose build` 後 `up`、`--force-recreate`、`down` 後 `up`）都會連同資料一起丟棄，而那正是日常部署流程——此事已實際發生數次（#33）。資料目錄須與暫存目錄分開：暫存音檔用畢即刪、隨容器銷毀正是預期行為，混進持久化 volume 只會被 200 MB 級的上傳檔撐大。
+- **掛載點必須在 image 裡就存在且屬執行身分。** named volume 首次掛載時會從 image 的對應路徑繼承 owner 與權限；該路徑不存在時 Docker 建出的 volume 屬 root，而 BFF 以非 root 執行，會在建檔時以 Permission denied 啟動失敗。故 Dockerfile 須先 `mkdir` 並 `chown`，compose 才掛 volume——只做後者服務會起不來。
 
 ### 安全與資源邊界
 

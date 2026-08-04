@@ -8,6 +8,10 @@ services:
     environment:
       VIBE_VOX_FRONTEND_ORIGINS: "http://localhost:5173"
       VIBE_VOX_USE_STUB_MODELS: "true"
+    volumes:
+      # 與正式版同理（#33）。刻意與 prod 的 bff_data 分名：兩份 compose 同目錄即同
+      # project 名，同名會讓 dev 的測試資料流進正式資料。
+      - bff_dev_data:/data
     ports:
       - "8000:8000"
     networks:
@@ -35,3 +39,4 @@ networks:
 
 volumes:
   frontend_node_modules:
+  bff_dev_data:
