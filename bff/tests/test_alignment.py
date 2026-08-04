@@ -5,7 +5,67 @@
 """
 
 from vibe_vox.adapters.base import Segment, Word
-from vibe_vox.alignment import is_sane, merge_alignment
+from vibe_vox.alignment import find_word_defect, merge_alignment
+
+
+def _words(count: int, *, start: float = 0.0, each: float = 0.25) -> list[Word]:
+    """造 count 個等段的正常字，起點自 start。"""
+    return [
+        Word(Text="字", Start=round(start + i * each, 3), End=round(start + (i + 1) * each, 3))
+        for i in range(count)
+    ]
+
+
+def test_isolated_implausible_word_does_not_fail_the_segment():
+    # 單字時段異常是模型的**常態雜訊**（#26 的 13 字樣本即含一個零時段），不是整段
+    # 對歪。判準若對它零容忍，長段落幾乎必然被攔，實測 190 字的段落被攔而 33 與
+    # 42 字的通過，正是這個累積機率問題。丟棄 189 個可用的時間戳來排除 1 個可疑的，
+    # 代價遠大於收益。
+    words = _words(100)
+    words[42] = Word(Text="幾", Start=words[42].Start, End=words[42].Start)  # 零時段
+
+    assert find_word_defect(words, span=25.0, bounds=(0.0, 25.5)) is None
+
+
+def test_widespread_implausible_words_fail_the_segment():
+    # 佔比過高就不是雜訊而是系統性對歪（例如模型把整段的字均勻壓縮）。
+    words = _words(100)
+    for i in range(40):
+        words[i] = Word(Text="字", Start=words[i].Start, End=words[i].Start + 0.01)
+
+    defect = find_word_defect(words, span=25.0, bounds=(0.0, 25.5))
+
+    assert defect is not None
+    assert defect.code == "implausible_duration_ratio"
+
+
+def test_defect_carries_machine_readable_code():
+    # code 是穩定的機器可讀值：#32 要統計各判準的攔下次數，靠人類可讀描述做字串
+    # 比對太脆。detail 才是給人看的。
+    reversed_words = [
+        Word(Text="你", Start=1.00, End=1.20),
+        Word(Text="好", Start=0.80, End=1.00),
+    ]
+
+    defect = find_word_defect(reversed_words, span=0.4, bounds=(0.0, 4.0))
+
+    assert defect is not None
+    assert defect.code == "reversed_timestamps"
+    assert "你" in defect.detail or "好" in defect.detail  # 指出哪個字
+
+
+def test_structural_defect_still_reports_duration_ratio():
+    # 結構缺陷不可讓時段佔比從 log 消失：#32 要的正是各段的佔比分布，若逆轉的段落
+    # 直接早退，那批資料就永遠收不到。
+    words = _words(10)
+    words[0] = Word(Text="零", Start=words[0].Start, End=words[0].Start)  # 時段異常
+    words[5] = Word(Text="逆", Start=0.0, End=0.2)  # 結構：逆轉
+
+    defect = find_word_defect(words, span=2.5, bounds=(0.0, 3.0))
+
+    assert defect is not None
+    assert defect.code == "reversed_timestamps"  # 結構優先
+    assert "佔比" in defect.detail  # 但佔比仍記錄下來
 
 
 def test_zero_duration_word_fails_check():
@@ -16,11 +76,11 @@ def test_zero_duration_word_fails_check():
         Word(Text="乎", Start=2.48, End=2.72),
     ]
 
-    assert not is_sane(words, span=0.4, bounds=(0.0, 4.204))
+    assert find_word_defect(words, span=0.4, bounds=(0.0, 4.204)) is not None
 
 
 def test_normal_chinese_pace_passes_check():
-    # #26 實測的正常字時長為 0.16–0.40 秒（ADR-0004）。判準若比這嚴，每段都會被
+    # #26 實測的正常字時段為 0.16–0.40 秒（ADR-0004）。判準若比這嚴，每段都會被
     # 誤判為對齊失敗，評分端反而拿不到本可用的資料。
     words = [
         Word(Text="甚", Start=0.40, End=0.56),
@@ -28,7 +88,7 @@ def test_normal_chinese_pace_passes_check():
         Word(Text="出", Start=0.96, End=1.20),
     ]
 
-    assert is_sane(words, span=0.85, bounds=(0.0, 4.204))
+    assert find_word_defect(words, span=0.85, bounds=(0.0, 4.204)) is None
 
 
 def test_overlong_word_fails_check():
@@ -38,11 +98,11 @@ def test_overlong_word_fails_check():
         Word(Text="的", Start=0.56, End=9.80),
     ]
 
-    assert not is_sane(words, span=10.0, bounds=(0.0, 12.0))
+    assert find_word_defect(words, span=10.0, bounds=(0.0, 12.0)) is not None
 
 
 def test_reversed_timestamps_fail_check():
-    # qwen-asr 的 fix_timestamp 以最長遞增子序列修單調性，但它修的是單調性不是
+    # qwen-asr 的 fix_timestamp 以最段遞增子序列修單調性，但它修的是單調性不是
     # 對齊正確性（ADR-0004），且我方不得假設上游一定修好。後字早於前字結束即
     # 表示對齊已失序。
     words = [
@@ -50,7 +110,7 @@ def test_reversed_timestamps_fail_check():
         Word(Text="好", Start=0.80, End=1.00),
     ]
 
-    assert not is_sane(words, span=0.4, bounds=(0.0, 4.0))
+    assert find_word_defect(words, span=0.4, bounds=(0.0, 4.0)) is not None
 
 
 def test_span_check_skipped_when_not_applicable():
@@ -60,12 +120,12 @@ def test_span_check_skipped_when_not_applicable():
         Word(Text="安", Start=0.62, End=0.85),
     ]
 
-    assert is_sane(words, span=None, bounds=(0.0, 40.07))
+    assert find_word_defect(words, span=None, bounds=(0.0, 40.07)) is None
 
 
 def test_span_far_shorter_than_segment_fails_check():
     # 票的第三項判準：段內首末時間與該段音訊長度偏離過大。對歪的典型表現是模型把
-    # 整段的字擠在開頭一小段——每個字的時長都正常、順序也單調，只有跨距不對，故
+    # 整段的字擠在開頭一小段——每個字的時段都正常、順序也單調，只有跨距不對，故
     # 前兩項判準抓不到它。
     words = [
         Word(Text="王", Start=0.40, End=0.62),
@@ -73,7 +133,7 @@ def test_span_far_shorter_than_segment_fails_check():
         Word(Text="蓮", Start=0.85, End=1.10),
     ]
 
-    assert not is_sane(words, span=39.57, bounds=(0.0, 40.07))
+    assert find_word_defect(words, span=39.57, bounds=(0.0, 40.07)) is not None
 
 
 def test_span_covering_most_of_segment_passes_check():
@@ -84,7 +144,7 @@ def test_span_covering_most_of_segment_passes_check():
         Word(Text="明", Start=38.90, End=39.20),
     ]
 
-    assert is_sane(words, span=39.57, bounds=(0.0, 40.07))
+    assert find_word_defect(words, span=39.57, bounds=(0.0, 40.07)) is None
 
 
 def test_words_within_buffer_region_pass_check():
@@ -96,13 +156,13 @@ def test_words_within_buffer_region_pass_check():
         Word(Text="好", Start=9.90, End=10.20),
     ]
 
-    assert is_sane(words, span=0.5, bounds=(9.3, 10.8))
+    assert find_word_defect(words, span=0.5, bounds=(9.3, 10.8)) is None
 
 
 def test_empty_words_fail_check():
     # #27 的 adapter 對退化段落回空清單（空 Content、切片落在音檔外）。無從驗證
     # 即不可信，且下游無法據以重算段界。
-    assert not is_sane([], span=4.0, bounds=(0.0, 4.0))
+    assert find_word_defect([], span=4.0, bounds=(0.0, 4.0)) is not None
 
 
 def test_merge_recomputes_segment_bounds_from_words():
@@ -164,7 +224,7 @@ def test_summary_counts_only_aligned_segments():
 
     _, summary = merge_alignment(segments, words, audio_duration=4.5, slice_buffer=0.5)
 
-    assert summary.audio_duration == 4.5  # 音檔實際總長，非 Segment End 最大值
+    assert summary.audio_duration == 4.5  # 音檔實際總段，非 Segment End 最大值
     assert summary.speech_start == 0.40
     assert summary.speech_end == 0.96
     assert summary.aligned_duration == 0.56  # 僅第一段的 0.96 − 0.40
@@ -200,8 +260,8 @@ def test_merge_exempts_first_and_last_segment_from_span_check():
 
 def test_merge_never_aligns_zero_length_segment():
     # 模型輸出缺欄位時 Start 與 End 同補 0.0（docs/api/asr.md §6）。該段的切片只有
-    # buffer 區的音訊，卻配整段話的文字，對齊結果必然無意義——但每個字的時長、
-    # 順序與範圍都可能正常，前三項判準攔不到它。零長度段落本身即退化訊號。
+    # buffer 區的音訊，卻配整段話的文字，對齊結果必然無意義——但每個字的時段、
+    # 順序與範圍都可能正常，其餘判準攔不到它。零長度段落本身即退化訊號。
     segments = [Segment(Start=0.0, End=0.0, Speaker="0", Content="你好")]
     words = [
         [Word(Text="你", Start=0.0, End=0.25), Word(Text="好", Start=0.25, End=0.5)]

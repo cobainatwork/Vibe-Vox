@@ -7,6 +7,7 @@
 """
 
 import json
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
@@ -16,6 +17,8 @@ from vibe_vox.adapters.base import AlignerClient, AsrClient, Segment, Word
 from vibe_vox.alignment import merge_alignment
 from vibe_vox.audio.slice import wav_duration
 from vibe_vox.hotword_text import compile_context, enforce_context_budget, sanitize_text
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -52,7 +55,10 @@ async def _align_or_degrade(
     """
     try:
         return await aligner.align(wav, segments)
-    except (AlignerTimeout, AlignerUnavailable):
+    except (AlignerTimeout, AlignerUnavailable) as exc:
+        # warning 而非 info：本專案無 logging 設定，info 會被靜默丟棄。不記的話，
+        # merge_alignment 會逐段記「字級清單為空」而讀 log 的人不知道是服務掛了。
+        logger.warning("對齊服務不可用，全段降級為未對齊：%r", exc)
         return [[] for _ in segments]
 
 
