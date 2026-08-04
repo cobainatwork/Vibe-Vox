@@ -69,6 +69,10 @@ VibeVoice 的切點時間戳降級為**切片依據**：段長 30–40 秒遠低
   **機器有兩張卡，第二張已被非 Vibe-Vox 的工作負載佔用。** GPU 1 由 gpustack 管理的 `qwen3.6-35b-a3b` 與 `gemma-4-12b-it-qat` 佔 33118 MiB（餘 12934 MiB），且為動態調度，不可假設其餘裕穩定。`docker-compose.yml` 目前把三個 GPU 服務全釘在 `device_ids: ["0"]`。
 
   **VoxCPM2 在當前配置下無法與 vLLM、aligner 並存於 GPU 0**：餘裕 5830 MiB 小於其所需的約 8 GB。aligner 不是瓶頸（實測比估算少 1–2 GB），瓶頸是未設定的 vLLM utilization。此為 TTS 上線的前置阻礙，須先決定是把 vLLM 調回原設計的 0.55–0.6（代價為 KV cache 縮小、影響併發與 `max_model_len`），或改變卡的分配。
+- **batch 上限 32 已由實測校準**（#26，2026-08-04，34 秒段長）。VRAM 峰值 5750 MiB，在 vLLM 佔 37890 MiB 的當前配置下餘 2428 MiB；邊際成本約 108 MiB/段，64 段即超出可用量。記憶體**線性於總音訊長度而非平方**——音訊編碼器按 `n_window * 2 = 100` frames 分塊處理，卷積亦分塊，官方 `modeling_qwen3_asr.py` 的註解即為 `Split to chunk to avoid OOM during convolution`，故不存在全序列 attention 的平方成長。
+
+  對 T2 的直接影響：61 分鐘音檔約 100 段、外推需約 13094 MiB，故當前配置下**必須分批**（約 4 批）。分批代價小——32 段（總音訊 1075 秒）耗時 1.4 秒、RTF ≈ 0.0013（與本文記載的 0.001 相符），batch 相對逐段送僅快約 2.3 倍，是常數級而非數量級改善。量測腳本見 `aligner/scripts/`；vLLM 配置改動後須重測。
+
 - **ASR 文字品質成為時間戳品質的前置條件**。強制對齊無容錯機制（訓練以 MFA pseudo-label，假設 text 與 audio 完全對應），轉錄若含亂碼、漏字、多字會靜默對歪。故 #23（prompt 對齊訓練格式）由可選優化升格為必要前置。
 - **時間解析度 80ms**（`config.json` 的 `timestamp_segment_time`；模型輸出的離散索引乘以此值即毫秒）。可穩定分辨的最小停頓約 80–160ms；話術評分關心的猶豫、卡頓多在 300ms 以上，故足夠。80ms 以下的微停頓測不出，該尺度屬協同發音範疇，本不應計入評分。
 - **回應體積顯著增加**。中文語速約每分鐘 200–300 字，60 分鐘音檔產生逾萬個 Word 物件，約增 700 KB。上傳上限已為 200 MB，此量級無虞，但消費端須知回應不再是小 JSON。

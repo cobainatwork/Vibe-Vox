@@ -39,9 +39,10 @@ class Settings:
     )
     # 單一請求的段數上限。單段有秒數上限，但聚合量沒有——61 分鐘音檔約 100 段，
     # 一次送就撞 VRAM，而該卡由 vllm 與 tts 共用，CUDA OOM 會波及它們。
-    # 32 是保守起點而非實測值：官方範例對同架構、更大的 Qwen3-ASR-1.7B 用
-    # max_inference_batch_size=32，本模型僅 0.6B。**須以 ADR-0004 要求的單段
-    # VRAM 峰值實測校準**（見 aligner/README.md 的待驗證清單）。
+    # 32 已由實測支撐（2026-08-04，34 秒段長）：VRAM 峰值 5750 MiB，在 vLLM 佔
+    # 37890 MiB 的當前配置下尚餘 2428 MiB。邊際成本約 108 MiB/段，故 64 段會超出
+    # 可用量。量測腳本見 aligner/scripts/，數據見 README——vLLM 的
+    # gpu_memory_utilization 若改動，此上限須重測。
     max_batch_items: int = field(
         default_factory=_env("VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS", "32", int)
     )

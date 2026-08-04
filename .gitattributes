@@ -1,0 +1,8 @@
+# shell 腳本一律以 LF 入庫並 checkout：aligner/scripts/ 下的量測腳本在 Linux 的
+# GPU 宿主上執行，帶 CRLF 會讓 bash 報 "bad interpreter: /usr/bin/env bash^M"，
+# 而該錯誤訊息完全指不到真正的原因。開發機為 Windows，不能只靠 core.autocrlf。
+*.sh text eol=lf
+
+# Dockerfile 與 compose 檔同樣只在 Linux 端被消費。
+*.Dockerfile text eol=lf
+Dockerfile text eol=lf

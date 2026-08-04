@@ -143,6 +143,32 @@ VoxCPM2 約需 8 GiB，GPU 0 的 5830 MiB 不夠。根因是 **ADR-0004 假設 v
 
 完整的實測對照與後續選項記於 ADR-0004 的 Consequences。這是 TTS 上線的前置阻礙，不屬 #26 的交付範圍。
 
-### batch 上限仍未校準
+### batch 上限已校準
 
-`VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS` 預設 32 仍無實測依據——上述量測只做了單段。要校準需分別量 8／16／32 段的峰值。單段推論只增 162 MiB，但 batch 的 activation 隨 padding 後的最長序列與批次大小成長，不可線性外推。
+以 34 秒段長、104 字（貼近 VibeVoice 實際切出的段落）逐級量測。用官方那個 4.2 秒的測試音訊量會嚴重低估。
+
+| batch | VRAM | 增量 | 耗時 |
+|---|---|---|---|
+| idle | 2348 MiB | — | — |
+| 1 | 2628 MiB | +280 | 0.1s |
+| 2 | 2628 MiB | +0 | 0.1s |
+| 4 | 2728 MiB | +100 | 0.2s |
+| 8 | 3170 MiB | +442 | 0.3s |
+| 16 | 4016 MiB | +846 | 0.6s |
+| 32 | **5750 MiB** | +1734 | 1.4s |
+
+重現：`aligner/scripts/bench_vram.sh`（在 GPU 宿主上執行）。
+
+**記憶體線性於總音訊長度，不是平方。** 音訊編碼器按 `n_window * 2 = 100` frames 分塊處理、卷積也分塊（`modeling_qwen3_asr.py` 的 `chunk_num = ceil(feature_lens / (n_window * 2))`，官方註解寫 `Split to chunk to avoid OOM during convolution`），所以不存在全序列 attention 的平方成長。
+
+**`VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS = 32` 由此得到支撐**，但那是綁定當前 vLLM 配置的結論：
+
+```
+aligner 可用上限 = 46068 - 37890 (vLLM) = 8178 MiB
+32 段實測 5750  →  餘 2428 MiB
+邊際成本 1734 / 16 ≈ 108 MiB/段  →  64 段約需 9218 MiB，超出可用量
+```
+
+**給 #27 的兩個結論**：61 分鐘音檔約 100 段、外推需約 13094 MiB，在當前配置下**必須分批**（約 4 批）。而分批的代價很小——32 段（總音訊 1075 秒）只花 1.4 秒，RTF ≈ 0.0013，與 ADR-0004 記載的 0.001 相符；batch 相對逐段送約快 2.3 倍，是常數級改善而非數量級，所以分批不會成為瓶頸。
+
+vLLM 的 `gpu_memory_utilization` 若調整，上表的餘裕與上限都要重算。
