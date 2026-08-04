@@ -1,13 +1,20 @@
 """#5 ASR 語音轉文字：消費端契約 `POST /api/asr/transcribe`。
 
 回合制批次辨識。回應為消費端契約形狀（不套管理平面的 {data} 信封，見 ADR-0003）。
+
+#28 起附字級時間戳（ADR-0004）。對齊是附加功能，其失效不得使逐字稿一併不可得，
+故對齊服務的例外在此攔下並降級，**不往上映射成 502／504**。
 """
 
 import json
+from pathlib import Path
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 
-from vibe_vox.adapters.base import AsrClient
+from vibe_vox.adapters.aligner import AlignerTimeout, AlignerUnavailable
+from vibe_vox.adapters.base import AlignerClient, AsrClient, Segment, Word
+from vibe_vox.alignment import merge_alignment
+from vibe_vox.audio.slice import wav_duration
 from vibe_vox.hotword_text import compile_context, enforce_context_budget, sanitize_text
 
 router = APIRouter()
@@ -35,6 +42,20 @@ def _parse_extra_terms(raw: str | None) -> list[str]:
     return [t for t in (sanitize_text(x) for x in parsed) if t]
 
 
+async def _align_or_degrade(
+    aligner: AlignerClient, wav: Path, segments: list[Segment]
+) -> list[list[Word]]:
+    """取字級時間戳；服務不可用或逾時則回空清單，交由 merge_alignment 標記未對齊。
+
+    這是 ADR-0004 兩層降級的第二層。**刻意不重試**：對齊是附加功能，為它延長
+    請求會拖累逐字稿的回應時間，而 aligner 服務端本身已對併發採 load-shed。
+    """
+    try:
+        return await aligner.align(wav, segments)
+    except (AlignerTimeout, AlignerUnavailable):
+        return [[] for _ in segments]
+
+
 @router.post("/api/asr/transcribe")
 async def transcribe(
     request: Request,
@@ -45,6 +66,7 @@ async def transcribe(
     settings = request.app.state.settings
     intake = request.app.state.audio_intake
     asr: AsrClient = request.app.state.asr_client
+    aligner: AlignerClient = request.app.state.aligner_client
     repo = request.app.state.hotwords
 
     extra = _parse_extra_terms(extra_terms)
@@ -53,14 +75,31 @@ async def transcribe(
     enforce_context_budget(context, settings.hotword_context_token_budget)
 
     guard = request.app.state.heavy_guard
-    # guard 涵蓋轉碼 + 辨識，上限設為兩者之和，讓 client 端辨識逾時（→ 504 ASR_TIMEOUT）
-    # 先觸發，guard 為總體 backstop。
+    # guard 涵蓋轉碼 + 辨識 + 對齊，上限設為三者之和，讓各 client 自身的逾時
+    # （→ 504 ASR_TIMEOUT／對齊降級）先觸發，guard 為總體 backstop。
     async with guard.slot(
-        timeout_seconds=settings.asr_timeout_seconds + settings.ffmpeg_timeout_seconds
+        timeout_seconds=settings.asr_timeout_seconds
+        + settings.ffmpeg_timeout_seconds
+        + settings.aligner_timeout_seconds
     ):
         async with intake.transcoded(
             _stream(file), sample_rate=settings.asr_sample_rate
         ) as wav:
             result = await asr.transcribe(wav, context=context)
+            audio_duration = wav_duration(wav)
+            words = await _align_or_degrade(aligner, wav, result.segments)
 
-    return result.model_dump() | {"applied_context": context}
+    segments, alignment = merge_alignment(
+        result.segments,
+        words,
+        audio_duration=audio_duration,
+        slice_buffer=settings.aligner_slice_buffer_seconds,
+    )
+    return result.model_dump() | {
+        "segments": [s.model_dump() for s in segments],
+        # duration 的定義不變（所有 Segment 的 End 最大值），但段界已重算為末字 End，
+        # 故其值隨對齊改變。
+        "duration": max((s.End for s in segments), default=0.0),
+        "alignment": alignment.model_dump(),
+        "applied_context": context,
+    }

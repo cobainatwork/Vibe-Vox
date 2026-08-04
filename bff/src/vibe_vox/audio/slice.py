@@ -1,4 +1,4 @@
-"""逐段切片：從正規化 wav 取出時間區間，供字級強制對齊逐段送出（ADR-0004）。
+"""正規化 wav 的讀取：時間區間切片與實際長度，供字級強制對齊使用（ADR-0004）。
 
 輸入恆為 AudioIntake.transcoded() 的產出（pcm_s16le 單聲道 wav），格式為內部
 不變量，故以 stdlib wave 做 byte 層切片而不再起 ffmpeg 子進程：切片無需重新編碼，
@@ -25,6 +25,17 @@ class Slice:
     wav: bytes
     start: float
     frames: int
+
+
+def wav_duration(src: Path) -> float:
+    """音檔的實際總長（秒）。
+
+    不可用 TranscriptionResult.duration 代替：那是所有 Segment 的 End 最大值，
+    尾端靜音不計入（docs/api/asr.md §4.2），而 alignment.audio_duration 要的是
+    實際長度——結尾沉默時長正是由兩者的差算出。
+    """
+    with wave.open(str(src), "rb") as reader:
+        return reader.getnframes() / reader.getframerate()
 
 
 def slice_wav(src: Path, *, start: float, end: float) -> Slice:

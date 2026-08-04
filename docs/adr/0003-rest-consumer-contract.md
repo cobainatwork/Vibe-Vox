@@ -20,3 +20,12 @@ Vibe-Vox 對消費者 AI_practise（智能陪練平台）提供 REST 契約：AS
 - TTS 串流回應納入範圍（第一音塊就緒即播，降低對話感知延遲）。
 - 若未來需要邊講邊出的即時 partial ASR（live caption／barge-in），須改用真正的串流 ASR 模型並重新評估傳輸層。
 - 消費端形狀為約束性：Hotwords 對消費端維持 `{id, word}`；TTS wav 輸出須 24kHz／mono／16-bit 以供消費端剝頭成 PCM。
+- **ASR 回應於 #28 擴充字級對齊欄位**（ADR-0004 的連動項，向後相容——既有欄位形狀與值不變）：`segments[]` 加 `aligned: bool` 與 `words: [{Text, Start, End}]`，根層加 `alignment: {audio_duration, speech_start, speech_end, aligned_duration}`。完整形狀見 `docs/api/asr.md` §4.4。
+
+  三項對消費端有實質影響的性質：
+
+  **`Segment.Start`／`End` 的語義隨 `aligned` 改變**——true 時為首字與末字的實際發音邊界，false 時退回模型自選的切點。混用會得到錯誤結果。這是本契約唯一「同一欄位有兩種語義」之處，故 `aligned` 必須顯式檢查。
+
+  **不可以 `words` 為空代替判斷 `aligned`**。空陣列與「該段沒有字」語義不同。
+
+  **對齊失效不產生錯誤碼**。對齊服務不可用或逾時仍回 HTTP 200 與完整逐字稿，全段標記 `aligned: false`——逐字稿有獨立價值，不因評分這項附加功能失效而一併不可得。消費端無需為此加錯誤處理分支，但須容忍 `words` 恆空的情形。

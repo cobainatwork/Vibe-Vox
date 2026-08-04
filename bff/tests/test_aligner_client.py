@@ -245,6 +245,17 @@ def test_align_raises_unavailable_on_error_status(tmp_path):
         asyncio.run(client.align(_wav(tmp_path), segments))
 
 
+def test_align_raises_unavailable_on_non_json_body(tmp_path):
+    # 回 200 但主體非 JSON（proxy 介入、服務被替換）時 resp.json() 拋
+    # JSONDecodeError，它不屬 httpx.HTTPError。不攔就會冒成 500 使逐字稿一併失效，
+    # 違反「aligner 全掛時逐字稿仍可取得」（ADR-0004 第二層降級）。
+    client = _client(lambda r: httpx.Response(200, text="<html>502 Bad Gateway</html>"))
+    segments = [Segment(Start=0.0, End=1.0, Speaker="0", Content="你好")]
+
+    with pytest.raises(AlignerUnavailable):
+        asyncio.run(client.align(_wav(tmp_path), segments))
+
+
 @pytest.mark.parametrize(
     "body",
     [

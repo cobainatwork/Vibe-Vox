@@ -9,7 +9,7 @@ import io
 import wave
 from pathlib import Path
 
-from vibe_vox.audio.slice import slice_wav
+from vibe_vox.audio.slice import slice_wav, wav_duration
 
 _RATE = 1000  # 真實輸入為 24000；取樣率不影響切片邏輯，小值使斷言的算術一目了然
 
@@ -32,6 +32,15 @@ def _read_frames(wav: bytes) -> list[int]:
     with wave.open(io.BytesIO(wav), "rb") as w:
         raw = w.readframes(w.getnframes())
     return [int.from_bytes(raw[i : i + 2], "little") for i in range(0, len(raw), 2)]
+
+
+def test_wav_duration_reads_actual_length(tmp_path):
+    # alignment.audio_duration 要的是音檔實際總長，而 TranscriptionResult.duration
+    # 是 Segment End 最大值——尾端靜音不計入，恆小於或等於實際長度
+    # （docs/api/asr.md §4.2）。故不可用後者代替。
+    src = _write_wav(tmp_path / "a.wav", frames=int(2.5 * _RATE))
+
+    assert wav_duration(src) == 2.5
 
 
 def test_slice_extracts_requested_interval(tmp_path):

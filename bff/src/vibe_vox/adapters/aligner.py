@@ -25,11 +25,15 @@ from vibe_vox.audio.slice import Slice, slice_wav
 
 
 class AlignerUnavailable(Exception):
-    """對齊服務連不上、回非 2xx 或回傳信封異常（端點層映射 → 502）。"""
+    """對齊服務連不上、回非 2xx 或回傳信封異常。
+
+    **端點層攔下並降級，不映射成狀態碼**：對齊是附加功能，逐字稿有獨立價值，不因
+    它失效而一併不可得（ADR-0004 的第二層降級）。回應仍為 200，全段標記未對齊。
+    """
 
 
 class AlignerTimeout(Exception):
-    """對齊服務呼叫逾時（端點層映射 → 504）。"""
+    """對齊服務呼叫逾時。降級方式同 AlignerUnavailable，不映射成狀態碼。"""
 
 
 # 切片左右各留的 buffer（秒）。VibeVoice 的段界是模型自選切點而非發音邊界
@@ -38,9 +42,10 @@ class AlignerTimeout(Exception):
 #
 # 0.5 秒是**由單字時長推導的下界，不是切點漂移的實測值**：#26 實測單字時長為
 # 0.16–0.40 秒（ADR-0004 Consequences），buffer 至少須覆蓋其上界才能保證邊界字
-# 完整。漂移量本身尚未量測——那需要真實 VibeVoice 切分的音檔比對切點與發音邊界，
-# 屬 #28 端到端驗證時該做的校準。放大的代價是納入更多鄰段語音：強制對齊會把無
-# 對應文字的音訊分配給首尾字，使邊界時間戳外擴，故不宜先行加大。
+# 完整。漂移量本身**仍未量測**——那需要真實錄音跑完整鏈路、比對切點與發音邊界，
+# 追蹤於 #32。放大的代價是納入更多鄰段語音：強制對齊會把無對應文字的音訊分配給
+# 首尾字，使邊界時間戳外擴，進而影響段間間隙（即評分端要用的句間停頓），故不宜
+# 在有實測前先行加大。
 DEFAULT_SLICE_BUFFER_SECONDS = 0.5
 
 
@@ -156,6 +161,10 @@ class HttpAlignerClient:
         except httpx.TimeoutException as exc:
             raise AlignerTimeout from exc
         except httpx.HTTPError as exc:
+            raise AlignerUnavailable from exc
+        except json.JSONDecodeError as exc:
+            # 200 但主體非 JSON（proxy 介入、服務被替換成別的東西）。不攔會冒成
+            # 500 使逐字稿一併失效，違反 ADR-0004 的第二層降級。
             raise AlignerUnavailable from exc
 
         # 未送出的段落留空位，使結果的索引仍與 segments 對齊。
