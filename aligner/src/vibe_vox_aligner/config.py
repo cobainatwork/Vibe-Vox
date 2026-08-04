@@ -37,12 +37,13 @@ class Settings:
     max_concurrent_requests: int = field(
         default_factory=_env("VIBE_VOX_ALIGNER_MAX_CONCURRENT_REQUESTS", "1", int)
     )
-    # 單一請求的段數上限。單段有秒數上限，但聚合量沒有——61 分鐘音檔約 100 段，
-    # 一次送就撞 VRAM，而該卡由 vllm 與 tts 共用，CUDA OOM 會波及它們。
-    # 32 已由實測支撐（2026-08-04，34 秒段長）：VRAM 峰值 5750 MiB，在 vLLM 佔
-    # 37890 MiB 的當前配置下尚餘 2428 MiB。邊際成本約 108 MiB/段，故 64 段會超出
-    # 可用量。量測腳本見 aligner/scripts/，數據見 README——vLLM 的
-    # gpu_memory_utilization 若改動，此上限須重測。
+    # 單一請求的段數上限，角色是異常防護而非日常限制：資料平面是回合制對話，
+    # 單輪語音 1-2 分鐘、經 VibeVoice 的 30-40 秒切分後約 2-4 段，遠觸不到此值。
+    # 它防的是管理平面誤上傳長音檔或呼叫端出錯——聚合量無上限時會撞 VRAM，
+    # 而該卡由 vllm 與 tts 共用，CUDA OOM 會波及它們。
+    # 32 已由實測支撐（2026-08-04，34 秒段長）：峰值 5750 MiB、邊際約 108 MiB/段，
+    # 日常負載的 4 段僅 2728 MiB。數據與量測腳本見 aligner/README.md 與
+    # aligner/scripts/——vLLM 的 gpu_memory_utilization 若改動，此上限須重測。
     max_batch_items: int = field(
         default_factory=_env("VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS", "32", int)
     )
