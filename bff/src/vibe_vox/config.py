@@ -114,7 +114,7 @@ class Settings:
     # 這條耦合的完整理由見 `adapters/aligner.py` 的 DEFAULT_MAX_BATCH_ITEMS；不變量由
     # `test_config.py` 實際比對兩邊的設定檔守著，不靠註解（#35 的教訓）。
     aligner_max_batch_items: int = field(
-        default_factory=_env("VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS", "32", int)
+        default_factory=_env("VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS", "8", int)
     )
     # 逐段切片左右各留的 buffer（秒）。VibeVoice 的段界是模型自選切點而非發音邊界，
     # 可能落在某個字的發音中間；buffer 使邊界字的音訊完整落在切片內。取值依據見

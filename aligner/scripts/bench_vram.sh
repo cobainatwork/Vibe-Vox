@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # 在 GPU 宿主上執行，量測 aligner 各 batch 級數的 VRAM 峰值。
 #
+# **本腳本產生的數字曾被用來定 batch 上限 32，而那個上限在真機上 CUDA OOM**（2026-08-05，
+# #36）。原因在 bench_batch.py：它把**同一段音訊重複 N 次**。批次張量會 pad 到該批最長
+# 的段落，均勻輸入的 padding 浪費恰好 1.00 倍，真實錄音接近 2 倍，故本腳本會系統性低估
+# 真實負載。用它重測前請先讓 bench_batch.py 吃真實錄音的段長分布，否則會再得到同樣誤導
+# 的數字。詳見 aligner/README.md 的「上限已由 32 降為 8」。
+#
 # 為何在宿主而非容器內跑：nvidia-smi 的 used_memory 是 per-process，要量的是
 # uvicorn 那個行程。docker exec 開的新 process 讀 torch.cuda.max_memory_allocated()
 # 只會讀到自己（永遠是 0），這是量測 GPU 服務時最容易踩的坑。

@@ -24,7 +24,12 @@ log 用 `warning` 而非 `info` **不是隨意的**：本專案沒有 logging �
 只配置自己的 logger，故 `vibe_vox.*` 的 effective level 是 WARNING、root 無 handler。
 `info()` 會被靜默丟棄，診斷等於沒有。
 
-三個推算閾值待實測校準（#32）。
+**閾值的校準狀態（#32）**：單字時長下界由模型的時間解析度導出，已經實測驗證；上界
+在真人語音樣本中從未觸發，仍是推算值；異常佔比與跨距下界亦為推算值，後者對多語者
+會議的簡短應答段有已知的誤判（#40）。
+
+**一個會重演的陷阱**：閾值若剛好等於被量化資料的格點，比較結果由浮點誤差決定而非由
+語義決定。下界原本設在格點上，使 216 個正常字被誤判為異常，見 DEGENERATE_WORD_SECONDS。
 """
 
 import logging
@@ -48,12 +53,29 @@ class Defect:
     code: str
     detail: str
 
-# 單字時長的下界，即模型的時間解析度（config.json 的 timestamp_segment_time，
-# 80ms，ADR-0004）。小於一個解析度單位的時長模型無法真實產生，只能是退化輸出；
-# #26 實測到的零時長「幾」即落在此界之下。
+# 模型的時間解析度（config.json 的 timestamp_segment_time，ADR-0004）。短於此值的字長
+# 不可能是真實量測，只能是退化輸出或後處理的產物，故它就是單字時長的下界。
 #
+# **時間戳並不落在此值的格點上**：實測 `4.19 / 0.08 = 52.375`。多數字的時長是它的整數倍
+# （1941 字中 392 個恰為一單位），但後處理也會產生 0.04、0.048 這類非整數倍的值。
+WORD_TIME_RESOLUTION_SECONDS = 0.08
+
+# 比較時長與上述下界的容差，**這條是必要的而非防禦性的**。
+#
+# 時間戳相減會帶 1e-13 量級的尾數，故直接寫 `duration < 0.08` 會把同一種時長判到兩邊：
+# `4.27 - 4.19 = 0.07999999999999918` 被攔，而 `6.11 - 6.03 = 0.08000000000000007` 沒被攔。
+# 真機實測 1941 字中有 392 個恰好一單位，216 個因此被誤判為異常，佔全部「異常」的 54.5%
+# （2026-08-05，#32）。
+#
+# **曾試過把下界改設在格點之間（0.04）來迴避，那是錯的**：0.04 本身就是資料裡出現的值
+# （`453.13 - 453.09 = 0.040000000000020464` 與 `453.21 - 453.17 = 0.03999999999996362`），
+# 同一個缺陷原地重演。閾值不能設在資料實際出現的值上，只能對它做容差比較。
+#
+# 1e-6 秒遠大於浮點尾數、又遠小於任何有意義的時長差（最接近下界的實測值是 0.048，距離
+# 0.032 秒），故每個實際出現的時長都能得到穩定的判定。
+_DURATION_TOLERANCE_SECONDS = 1e-6
+
 # **落在界外不使該段失敗**，只累計佔比，見 MAX_IMPLAUSIBLE_DURATION_RATIO。
-MIN_WORD_SECONDS = 0.08
 
 # 單字時長的上界。中文語速約每分鐘 200–300 字（ADR-0004），即每字 0.2–0.3 秒；
 # 2.0 秒為其 7–10 倍，含拖長音的正常發音達不到，而對歪時單字會吃掉整段靜音、
@@ -247,7 +269,8 @@ def _scan_words(
     for word in words:
         duration = word.End - word.Start
         # 局部雜訊，只累計（見模組 docstring 的分層說明）。
-        if duration < MIN_WORD_SECONDS or duration > MAX_WORD_SECONDS:
+        too_short = duration < WORD_TIME_RESOLUTION_SECONDS - _DURATION_TOLERANCE_SECONDS
+        if too_short or duration > MAX_WORD_SECONDS:
             implausible.append(word)
         if structural is None and previous_end is not None and word.Start < previous_end:
             structural = Defect(

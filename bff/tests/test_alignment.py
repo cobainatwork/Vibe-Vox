@@ -81,6 +81,43 @@ def test_zero_duration_word_fails_check():
     assert find_word_defect(words, span=0.4, bounds=(0.0, 4.204)) is not None
 
 
+def test_word_of_exactly_one_time_unit_is_not_an_anomaly():
+    # 模型的時間解析度是 80 ms，故 0.08 秒是它能表達的**最短真實時長**，不是退化輸出。
+    # 判準原本寫 `< 0.08`，數學上不該攔下它，但浮點減法讓同一種時長落到兩邊：真機實測
+    # 1941 字中有 392 個恰好一單位，其中 216 個被判異常、176 個被判正常，差別只在絕對
+    # 時間戳。這使 396 個「異常」裡有 216 個（54.5%）是假陽性，而當次有 19 段踩到佔比
+    # 判準——修正能救回幾段尚未重跑確認，但假陽性本身已由這條測試釘住。
+    #
+    # 兩個取自真機資料的時間戳：
+    #   4.27 − 4.19 = 0.07999999999999918  （原本判為異常）
+    #   6.11 − 6.03 = 0.08000000000000007  （原本判為正常）
+    unlucky = [Word(Text="這", Start=4.19, End=4.27)]
+    lucky = [Word(Text="嗎", Start=6.03, End=6.11)]
+
+    assert find_word_defect(unlucky, span=None, bounds=(0.0, 10.0)) is None
+    assert find_word_defect(lucky, span=None, bounds=(0.0, 10.0)) is None
+
+
+def test_same_duration_always_gets_the_same_verdict(caplog):
+    # 判準的界**不可設在資料實際出現的值上**，否則浮點尾數會把同一種時長分到兩邊。
+    # 這條測的是不變量本身（同時長 → 同判定），不規定判到哪一邊。
+    #
+    # 時間戳並非落在解析度格點上（實測 4.19 / 0.08 = 52.375），且後處理會產生非整數倍
+    # 的時長。真機資料裡的 0.04 秒字：
+    #   453.13 − 453.09 = 0.040000000000020464
+    #   453.21 − 453.17 = 0.03999999999996362
+    pairs = [
+        (0.04, [Word(Text="這", Start=453.09, End=453.13)],
+                [Word(Text="這", Start=453.17, End=453.21)]),
+        (0.08, [Word(Text="這", Start=4.19, End=4.27)],
+                [Word(Text="嗎", Start=6.03, End=6.11)]),
+    ]
+    for duration, first, second in pairs:
+        a = find_word_defect(first, span=None, bounds=(0.0, 500.0))
+        b = find_word_defect(second, span=None, bounds=(0.0, 500.0))
+        assert (a is None) == (b is None), f"{duration} 秒的兩個字被判到不同邊"
+
+
 def test_normal_chinese_pace_passes_check():
     # #26 實測的正常字時段為 0.16–0.40 秒（ADR-0004）。判準若比這嚴，每段都會被
     # 誤判為對齊失敗，評分端反而拿不到本可用的資料。

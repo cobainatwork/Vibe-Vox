@@ -37,13 +37,18 @@ class Settings:
     max_concurrent_requests: int = field(
         default_factory=_env("VIBE_VOX_ALIGNER_MAX_CONCURRENT_REQUESTS", "1", int)
     )
-    # 單一請求的段數上限，角色是異常防護而非日常限制：資料平面是回合制對話，
-    # 單輪語音 1-2 分鐘、經 VibeVoice 的 30-40 秒切分後約 2-4 段，遠觸不到此值。
-    # 它防的是管理平面誤上傳長音檔或呼叫端出錯——聚合量無上限時會撞 VRAM，
-    # 而該卡由 vllm 與 tts 共用，CUDA OOM 會波及它們。
-    # 32 已由實測支撐（2026-08-04，34 秒段長）：峰值 5750 MiB、邊際約 108 MiB/段，
-    # 日常負載的 4 段僅 2728 MiB。數據與量測腳本見 aligner/README.md 與
-    # aligner/scripts/——vLLM 的 gpu_memory_utilization 若改動，此上限須重測。
+    # 單一請求的段數上限，角色是 VRAM 保護：聚合量無上限時會撞 VRAM，而該卡由 vllm
+    # 與 tts 共用，CUDA OOM 會波及它們。資料平面是回合制對話，單輪語音 1-2 分鐘、經
+    # VibeVoice 切分後約 2-4 段，遠觸不到此值。
+    #
+    # **8 取代原本校準的 32**（2026-08-05）。32 在真機上 CUDA OOM：63 段的會議錄音
+    # 分成 32 + 25 兩批，兩批都失敗。原本的校準（34 秒段長、峰值 5750 MiB）用的是同
+    # 一段音訊重複 32 次，padding 浪費恰好 1.00 倍；真實錄音的段長不均，批次張量 pad
+    # 到該批最長的段落，cap 32 之下 621 秒的實際音訊被 pad 成 1206 秒。
+    #
+    # 呼叫端（bff）讀同一個環境變數並據此分批，兩邊的預設值由 bff/tests/test_config.py
+    # 實際讀取本檔比對。改本值必須同時餵給兩個服務，否則超出的批次會被本服務拒收。
+    # 量測腳本見 aligner/scripts/；vLLM 的 gpu_memory_utilization 若改動須重測。
     max_batch_items: int = field(
-        default_factory=_env("VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS", "32", int)
+        default_factory=_env("VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS", "8", int)
     )

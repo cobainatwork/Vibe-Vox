@@ -146,9 +146,13 @@ def test_align_splits_into_batches_within_the_service_limit(tmp_path):
 
 
 def test_align_splits_the_meeting_recording_at_the_default_limit(tmp_path):
-    # #36 的驗收情境本身：63 段、**預設**上限 32（不是測試用的小值）。切成 32 + 31，
-    # 而服務端的判準是「超過才拒」，故恰好 32 段的批次會被接受（aligner 端有測試釘住
-    # 該語義）。此處刻意用預設值，否則驗收條件的那個組合沒有任何測試覆蓋。
+    # #36 的驗收情境本身，用**預設**上限而非測試用的小值：10 分鐘會議錄音切出 63 段，
+    # 扣掉 6 個非語音標記段（#38）後送出 57 段。
+    #
+    # 上限為何是 8 而非當初校準的 32：32 在真機上 CUDA OOM，兩批都失敗。計數式上限對
+    # 記憶體的主導變數是盲的——批次張量 pad 到該批最長的段落，而校準用的是同一段 34 秒
+    # 音訊重複 32 次，padding 浪費恰好 1.00 倍。真實錄音的段長是 1.77 至 41.29 秒，
+    # cap 32 之下 621 秒的實際音訊會被 pad 成 1206 秒。詳見 DEFAULT_MAX_BATCH_ITEMS。
     sizes: list[int] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -157,14 +161,20 @@ def test_align_splits_the_meeting_recording_at_the_default_limit(tmp_path):
         return _reply([{"words": []} for _ in audio])
 
     client = _client(handler, slice_buffer_seconds=0.5)
+    # 六個非語音標記段散在其中，故此處同時涵蓋「剔除與分批的交互」：剔除發生在分批之前，
+    # 批次大小算的是可送出的段數而非原段數。
+    segments = _numbered_segments(63)
+    for index, marker in ((0, "[Silence]"), (13, "[Unintelligible Speech]"),
+                          (15, "[Unintelligible Speech]"), (17, "[Silence]"),
+                          (20, "[Silence]"), (22, "[Music]")):
+        segments[index] = segments[index].model_copy(update={"Content": marker})
 
-    result = asyncio.run(
-        client.align(_wav(tmp_path, seconds=70.0), _numbered_segments(63))
-    )
+    result = asyncio.run(client.align(_wav(tmp_path, seconds=70.0), segments))
 
-    assert sizes == [32, 31]
+    assert sizes == [8, 8, 8, 8, 8, 8, 8, 1]  # 63 − 6 = 57 段送出
     assert max(sizes) <= DEFAULT_MAX_BATCH_ITEMS
-    assert len(result) == 63
+    assert len(result) == 63  # 回傳仍與原段數對齊，標記段留空位
+    assert result[0] == [] and result[13] == []
 
 
 def test_align_isolates_a_failed_batch_from_the_others(tmp_path):
