@@ -26,7 +26,9 @@ Qwen3-ForcedAligner-0.6B 的薄 HTTP 包裝，供 BFF 取得字級時間戳。�
 
 語言不開放指定：送進來的一律是 ASR 的中文逐字稿，服務恆以 `Chinese` 呼叫模型。多一個沒人會用的參數就多兩條測試路徑，理由同 ADR-0004 否決「`words` 設為可選開關」。
 
-一次請求即一個 batch：模型原生支援批次，逐段送反而多付固定成本。段數上限見下方設定，**預設 32 是保守起點而非實測值**——單段有秒數上限但聚合量沒有，61 分鐘音檔約 100 段一次送就撞 VRAM，而該卡由 vllm 與 tts 共用，CUDA OOM 會波及它們。傳輸層不是限制因素：已實測 multipart 可承受單段 180 秒（8.24 MiB）與 10 段共 16 MiB。
+一次請求即一個 batch：模型原生支援批次，逐段送反而多付固定成本。
+
+**實際負載很小。** 資料平面是回合制對話（AI_practise 錄一段話 → ASR → LLM → TTS → 回放），單輪語音 1–2 分鐘，經 VibeVoice 的 30–40 秒切分後約 2–4 段。段數上限 32 的角色是異常防護（管理平面誤上傳長音檔、呼叫端出錯），不是日常限制。傳輸層更不是限制：已實測 multipart 可承受單段 180 秒（8.24 MiB）與 10 段共 16 MiB。
 
 成功 200：
 
@@ -130,18 +132,20 @@ nvidia-smi --query-compute-apps=pid,gpu_bus_id,used_memory --format=csv
 docker ps --format "{{.ID}} {{.Names}}"   # 把 PID 對應到容器
 ```
 
-### tts 無法並存，但瓶頸不是 aligner
+### tts 能否並存尚未確定，但瓶頸不是 aligner
 
 實測的機器有**兩張** RTX 6000 Ada（各 46068 MiB），非 ADR 原記的單張 48 GB：
 
 ```
-GPU 0  vllm 37890 + aligner 2348 = 40238 / 46068   餘 5830 MiB
-GPU 1  gpustack 的 qwen3.6-35b 與 gemma-4-12b       餘 12934 MiB（動態調度）
+GPU 0  vllm 37890 + aligner 2728（日常負載 4 段） = 40618 / 46068   餘 5450 MiB
+GPU 1  gpustack 的 qwen3.6-35b 與 gemma-4-12b                       餘 12934 MiB（動態調度）
 ```
 
-VoxCPM2 約需 8 GiB，GPU 0 的 5830 MiB 不夠。根因是 **ADR-0004 假設 vLLM 用 `gpu_memory_utilization` 0.55–0.6，但該參數從未被實作**——`docker/vllm.Dockerfile` 直接跑官方 `start_server.py`，其預設為 `0.8`，故多吃約 10 GB。aligner 反而比估算少用 1–2 GB。
+ADR-0004 記 VoxCPM2 約需 8 GiB，但**那是估算值而非實測**。餘裕 5450 MiB 與它同一量級，所以要先實測 VoxCPM2 的實際佔用才能判斷是否放得下——不能只憑估算就斷定不行。
 
-完整的實測對照與後續選項記於 ADR-0004 的 Consequences。這是 TTS 上線的前置阻礙，不屬 #26 的交付範圍。
+不論結果如何，有一項與 ADR 不符的事實需處理：**ADR-0004 假設 vLLM 用 `gpu_memory_utilization` 0.55–0.6，但該參數從未被實作**——`docker/vllm.Dockerfile` 直接跑官方 `start_server.py`，其預設為 `0.8`，故多吃約 10 GB。aligner 反而比估算少用 1–2 GB。
+
+完整的實測對照與後續選項記於 ADR-0004 的 Consequences 與 #31。不屬 #26 的交付範圍。
 
 ### batch 上限已校準
 
@@ -159,16 +163,21 @@ VoxCPM2 約需 8 GiB，GPU 0 的 5830 MiB 不夠。根因是 **ADR-0004 假設 v
 
 重現：`aligner/scripts/bench_vram.sh`（在 GPU 宿主上執行）。
 
+**上表是累積量測，各級數字為該級的上界。** 量測在同一容器內由小而大依序執行，而 PyTorch 的 caching allocator 不釋放已配置的記憶體，故「4 段 2728 MiB」實為「跑過 1、2、4 段之後」的值，單獨跑 4 段可能更低。這對判斷安全上限是保守的方向，但不可拿來做精確的容量規劃——要各級的獨立峰值，需每級之間重啟容器。
+
 **記憶體線性於總音訊長度，不是平方。** 音訊編碼器按 `n_window * 2 = 100` frames 分塊處理、卷積也分塊（`modeling_qwen3_asr.py` 的 `chunk_num = ceil(feature_lens / (n_window * 2))`，官方註解寫 `Split to chunk to avoid OOM during convolution`），所以不存在全序列 attention 的平方成長。
 
 **`VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS = 32` 由此得到支撐**，但那是綁定當前 vLLM 配置的結論：
 
 ```
 aligner 可用上限 = 46068 - 37890 (vLLM) = 8178 MiB
-32 段實測 5750  →  餘 2428 MiB
+32 段（異常防護上限）實測 5750  →  餘 2428 MiB
+4 段（日常負載）實測 2728       →  餘 5450 MiB
 邊際成本 1734 / 16 ≈ 108 MiB/段  →  64 段約需 9218 MiB，超出可用量
 ```
 
-**給 #27 的兩個結論**：61 分鐘音檔約 100 段、外推需約 13094 MiB，在當前配置下**必須分批**（約 4 批）。而分批的代價很小——32 段（總音訊 1075 秒）只花 1.4 秒，RTF ≈ 0.0013，與 ADR-0004 記載的 0.001 相符；batch 相對逐段送約快 2.3 倍，是常數級改善而非數量級，所以分批不會成為瓶頸。
+**給 #27 的結論**：日常負載的 2–4 段一次送完即可，不需分批。若真遇到超過 32 段的輸入（管理平面的長音檔），分批的代價也很小——32 段（總音訊 1075 秒）只花 1.4 秒，RTF ≈ 0.0013，與 ADR-0004 記載的 0.001 相符；batch 相對逐段送約快 2.3 倍，是常數級改善而非數量級。
+
+逐段切片仍是必要的，但理由不是長度限制（1–2 分鐘遠低於 180 秒上限），而是故障隔離：單段對歪不污染其他段，且 `words` 天然對應 `segment`。整段一次對齊反而要把 `words` 依字數分配回各 segment。
 
 vLLM 的 `gpu_memory_utilization` 若調整，上表的餘裕與上限都要重算。
