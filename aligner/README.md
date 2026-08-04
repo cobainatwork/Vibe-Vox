@@ -114,25 +114,35 @@ curl -X POST http://localhost:9100/align \
 
 測試音訊取自官方 model card：`https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-ASR-Repo/asr_zh.wav`
 
-## 仍待 GPU 驗證
+## GPU 實測結果（2026-08-04，遠端機）
 
-issue #26 只剩兩項驗收未完成，都是 GPU 專屬。在遠端機（RTX 6000 Ada 48GB）做：
+| 項目 | 結果 |
+|---|---|
+| image build、容器就緒 | `vibe-vox-aligner-1  Up (healthy)` |
+| 真實對齊 | 輸出與本機 CPU 模式**逐字相同**，含「幾」的零時長。故 CPU 驗證是有效替代，不必為驗對齊佔用 GPU |
+| **單段 VRAM 峰值** | **2348 MiB**（權重載入後 idle 2186，單段對齊 +162）。低於 ADR-0004 原估的 3–4 GB |
+| 與 vllm、tts 並存 | **當前配置下不可行**，見下 |
 
-**1. 單段 VRAM 峰值**，取代 ADR-0004 的 3–4 GB 估算值。在宿主上於對齊前後各讀一次：
-
-```bash
-nvidia-smi --query-compute-apps=pid,used_memory --format=csv
-```
-
-看的是整個 process 的 VRAM（含 CUDA context 與 allocator 快取），這正是與 vllm、tts 共用單卡時該關心的數字。**不要**在容器內另開 process 讀 `torch.cuda.max_memory_allocated()`——那是 per-process 的，讀不到 uvicorn 那個行程的值。
-
-分別量單段與 8／16／32 段，據此校準 `VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS`——目前的 32 無實測依據。
-
-**2. 與 vllm、tts 同時啟動不 OOM**
+VRAM 量測方式：在宿主上於對齊前後各讀一次。**不要**在容器內另開 process 讀 `torch.cuda.max_memory_allocated()`——那是 per-process 的，讀不到 uvicorn 那個行程的值。
 
 ```bash
-docker compose --profile tts up -d
-nvidia-smi --query-compute-apps=pid,used_memory --format=csv
+nvidia-smi --query-compute-apps=pid,gpu_bus_id,used_memory --format=csv
+docker ps --format "{{.ID}} {{.Names}}"   # 把 PID 對應到容器
 ```
 
-實測數字須回填 ADR-0004 的 Consequences 並在 issue #26 留言，之後才可關票。
+### tts 無法並存，但瓶頸不是 aligner
+
+實測的機器有**兩張** RTX 6000 Ada（各 46068 MiB），非 ADR 原記的單張 48 GB：
+
+```
+GPU 0  vllm 37890 + aligner 2348 = 40238 / 46068   餘 5830 MiB
+GPU 1  gpustack 的 qwen3.6-35b 與 gemma-4-12b       餘 12934 MiB（動態調度）
+```
+
+VoxCPM2 約需 8 GiB，GPU 0 的 5830 MiB 不夠。根因是 **ADR-0004 假設 vLLM 用 `gpu_memory_utilization` 0.55–0.6，但該參數從未被實作**——`docker/vllm.Dockerfile` 直接跑官方 `start_server.py`，其預設為 `0.8`，故多吃約 10 GB。aligner 反而比估算少用 1–2 GB。
+
+完整的實測對照與後續選項記於 ADR-0004 的 Consequences。這是 TTS 上線的前置阻礙，不屬 #26 的交付範圍。
+
+### batch 上限仍未校準
+
+`VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS` 預設 32 仍無實測依據——上述量測只做了單段。要校準需分別量 8／16／32 段的峰值。單段推論只增 162 MiB，但 batch 的 activation 隨 padding 後的最長序列與批次大小成長，不可線性外推。
