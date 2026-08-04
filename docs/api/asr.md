@@ -168,6 +168,10 @@ BFF 有一層 Origin 防護（`OriginGuardMiddleware`），規則是「來源存
 | `alignment.speech_start`／`speech_end` | **僅計 `aligned: true` 的段落**，見下方警告。無任何段落對齊成功時為 `null` |
 | `alignment.aligned_duration` | 所有 `aligned: true` 段落的時長之和（各段 `End − Start` 相加，不含段間間隙） |
 
+**`aligned: true` 不保證每個字的時間戳都精確。** 它保證的是該段的對齊**結構**可信（順序單調、落在音訊範圍內、跨距合理）。個別字的時長仍可能異常，包括零時長，而那是模型的常態輸出（實測異常率約 8%）。對它零容忍會讓 100 字以上的段落幾乎必然被判失敗，代價是整段的時間戳全部拿不到，故目前容許三成以內的字時長異常，超過即判定為系統性對歪並標 `aligned: false`。
+
+實務影響：算停頓時偶爾會遇到零時長的字，或某兩字之間出現不該有的短間隙。**停頓佔全文的百分比是統計量，個別異常值的影響可忽略**；但若你們的評分邏輯會取最大停頓值而非百分比，需要自行過濾離群值。
+
 **`aligned` 必須顯式檢查，不可用 `words.length === 0` 代替判斷**——空陣列與「該段沒有字」語義不同。
 
 **`Segment.Start`／`End` 在 `aligned` 為 `true` 與 `false` 時語義不同**：前者是實際發音邊界，後者退回切點。混用會得到錯誤結果。
@@ -246,7 +250,7 @@ BFF 有一層 Origin 防護（`OriginGuardMiddleware`），規則是「來源存
 |---|---|
 | 音訊有效但完全無語音 | `segments` 為空陣列，`duration` 為 `0.0`，HTTP 200。`alignment` 欄位結構完整回傳（`audio_duration` 為音檔實際長度，`speech_start`／`speech_end` 為 `null`，`aligned_duration` 為 `0`），**不報錯** |
 | 對齊服務不可用或逾時 | **HTTP 200**，逐字稿照常回傳，全段 `aligned: false`、`words` 為空、`Start`／`End` 維持切點語義。不回 502／504——逐字稿有獨立價值，不因評分這項附加功能失效而一併不可得 |
-| 單段對齊未通過合理性檢查 | 該段 `aligned: false`、`words` 為空、`Start`／`End` 退回切點，**其餘段照常**。攔下的型態：單字時長異常（小於模型的 80ms 時間解析度或超過 2 秒）、時間戳逆轉、時間戳落在該段音訊範圍外、對齊跨距不足該段長度的一半（此項不套用於首段與末段——頭尾沉默會壓低跨距，那是預期情境而非故障）、`Start` 與 `End` 相同的零長度段落 |
+| 單段對齊未通過合理性檢查 | 該段 `aligned: false`、`words` 為空、`Start`／`End` 退回切點，**其餘段照常**。攔下的是**結構性**問題：時間戳逆轉、落在該段音訊範圍外、對齊跨距不足該段長度的一半（此項不套用於首段與末段，因為頭尾沉默會壓低跨距，那是預期情境而非故障）、零長度段落、字級清單為空 |
 | 模型輸出非 JSON | `segments` 為空，`transcription_only` 為繁化後的原始文字，`raw_text` 保留原樣，HTTP 200 |
 | 模型輸出缺欄位 | 缺 `Start`／`End` 補 `0.0`，缺 `Speaker`／`Content` 補空字串，不報錯 |
 | 模型改用 `Start time` 等鍵名 | 自動相容（三重 fallback：`Start`／`start`／`Start time`） |
