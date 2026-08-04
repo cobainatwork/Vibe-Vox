@@ -112,11 +112,17 @@ def merge_alignment(
     *,
     audio_duration: float,
     slice_buffer: float,
+    aligner_failed: bool = False,
 ) -> tuple[list[AlignedSegment], AlignmentSummary]:
     """合併對齊結果、逐段檢查、重算段界，並算出四個彙總數字。
 
     未通過檢查的段落回退切點時間戳並標記，其餘段照常——ADR-0004 的兩層降級之
     第一層。
+
+    `aligner_failed` 表示對齊服務整體不可得（不可用或逾時）。**刻意不叫「上游」**：本
+    模組同時討論 ASR 模型的輸出品質，那個詞在此會歧義成 VibeVoice。此時全段的 words
+    必然為空，逐段記錄只會產生 N 條完全相同的訊息（#36 實測 63 條）而把端點層那條真正
+    的原因推出畫面。段落仍照常標記為未對齊，只是不重複記錄同一件事（#37）。
     """
     last = len(segments) - 1
     merged: list[AlignedSegment] = []
@@ -132,10 +138,11 @@ def merge_alignment(
             audio_duration=audio_duration,
             slice_buffer=slice_buffer,
         )
-        if defect is not None:
+        if defect is not None and not aligner_failed:
             # warning 而非 info：本專案無 logging 設定，info 會被靜默丟棄（見模組
-            # docstring）。逐段都記，包含空清單，因為那可能是「該段全是標點」這種
-            # 真正需要知道的情形，而非只有服務不可用。服務層級的失敗由端點另記一條。
+            # docstring）。對齊服務可用時逐段都記，包含空清單，因為那可能是「該段全是
+            # 標點」或 adapter 剔除了退化段落與非語音標記段這種真正需要知道的情形
+            # （#34、#38）。服務整體失敗則全段同因，由端點層記一條即可（#37）。
             logger.warning(
                 "第 %d 段未通過對齊檢查（%s）：%s", index + 1, defect.code, defect.detail
             )

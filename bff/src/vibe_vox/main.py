@@ -55,6 +55,7 @@ def _default_aligner_client(settings: Settings) -> AlignerClient:
         settings.aligner_base_url,
         timeout=settings.aligner_timeout_seconds,
         slice_buffer_seconds=settings.aligner_slice_buffer_seconds,
+        max_batch_items=settings.aligner_max_batch_items,
     )
 
 

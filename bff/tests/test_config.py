@@ -3,6 +3,8 @@
 import re
 from pathlib import Path
 
+import pytest
+
 from vibe_vox.config import Settings
 
 
@@ -53,6 +55,74 @@ def test_aligner_slice_buffer_covers_longest_word():
     # 依據為 #26 實測的單字時長上界 0.40 秒（ADR-0004 Consequences）：buffer 小於它
     # 則邊界字可能被切成兩半、兩段都對不準。放大則納入更多鄰段語音干擾對齊。
     assert Settings().aligner_slice_buffer_seconds == 0.5
+
+
+def _aligner_service_max_batch_items() -> int:
+    """從 aligner 服務端的 config 實際讀出單次段數上限的預設值。
+
+    刻意不寫死、也不 import：aligner 是獨立的部署單元與獨立的 venv，BFF 匯入不到它。
+    而寫死的斷言防不了「其中一邊被改掉」這種失效，那正是 #35 的教訓：跨元件的邊界值
+    若只靠註解同步，某天一邊改了就悄悄失效，而失效的表現是全段拿不到時間戳（#36）。
+    """
+    conf = (
+        Path(__file__).resolve().parents[2]
+        / "aligner"
+        / "src"
+        / "vibe_vox_aligner"
+        / "config.py"
+    )
+    m = re.search(
+        r'"VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS",\s*"(\d+)"', conf.read_text("utf-8")
+    )
+    assert m is not None, f"{conf} 未定義 VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS 的預設值"
+    return int(m.group(1))
+
+
+def test_batch_size_does_not_exceed_the_aligner_service_limit():
+    # 服務端超過上限即整批回 400 BATCH_TOO_LARGE，該批全段拿不到時間戳。呼叫端必須先於
+    # 送出就遵守它，不能靠撞牆後重試，故本端的值必須小於或等於服務端（#36）。
+    assert (
+        Settings().aligner_max_batch_items <= _aligner_service_max_batch_items()
+    )
+
+
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_batch_size_below_one_fails_at_startup(monkeypatch, value):
+    # 分批在 batch size 小於 1 時拋 ValueError，而端點只攔對齊服務的兩種例外，故每個
+    # 辨識請求都會回 500、**連逐字稿一起失效**，正是 ADR-0004 第二層降級要避免的結果。
+    # 設定錯誤該在啟動時就喊出來，而不是等到每個請求都壞掉才發現。
+    monkeypatch.setenv("VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS", value)
+
+    with pytest.raises(ValueError, match="VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS"):
+        Settings()
+
+
+def _compose_env_by_service(variable: str) -> dict[str, str]:
+    """讀 docker-compose.yml，回傳各服務為該環境變數設的值（未設的服務不列入）。
+
+    刻意不引入 YAML 依賴：只為一條測試加執行期相依不值得，而以服務層縮排切塊已足夠
+    （本檔的服務鍵一律兩格縮排且後方無值）。
+    """
+    compose = Path(__file__).resolve().parents[2] / "docker-compose.yml"
+    blocks = re.split(r"^  ([\w-]+):$", compose.read_text("utf-8"), flags=re.M)
+    # split 後的形狀為 [前言, 服務名, 內容, 服務名, 內容, ...]
+    found: dict[str, str] = {}
+    for name, body in zip(blocks[1::2], blocks[2::2]):
+        m = re.search(rf"^\s*{variable}:\s*(.+?)\s*$", body, re.M)
+        if m is not None:
+            found[name] = m.group(1)
+    return found
+
+
+def test_batch_size_is_wired_to_both_services_identically():
+    # bff 用這個值決定怎麼分批，aligner 用它決定拒絕什麼。compose 漏接任一邊不會報錯，
+    # 該服務只是改用自己的程式預設值；而兩邊不一致的症狀是整批回 400、該批全段拿不到
+    # 時間戳（#36）。修 #36 時發現 aligner 服務原本連 environment 區塊都沒有，設了
+    # 這個變數也不會生效，屬 #35 那類「設定看得到卻不生效」。
+    wired = _compose_env_by_service("VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS")
+
+    assert set(wired) == {"bff", "aligner"}, f"漏接的服務會用自己的預設值：{wired}"
+    assert len(set(wired.values())) == 1, f"兩邊的值不一致：{wired}"
 
 
 def test_asr_sample_rate_matches_plugin_target():

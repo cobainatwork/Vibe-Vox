@@ -74,6 +74,22 @@ def test_rejects_batch_over_item_limit() -> None:
     assert resp.json()["error"]["code"] == "BATCH_TOO_LARGE"
 
 
+def test_accepts_a_batch_exactly_at_the_item_limit() -> None:
+    """上限的語義是「超過才拒」而非「達到就拒」，呼叫端依此切出恰好 max_batch_items 段
+    的批次（#36）。
+
+    若這裡改成 `>=`，BFF 的分批會全數被拒，而 BFF 的單元測試以 mock 回應、不會發現；
+    症狀是全段拿不到時間戳，即 #36 的原始故障重演。故這個邊界須在服務端釘住。
+    """
+    resp = _client(max_batch_items=2).post(
+        "/align",
+        data={"items": json.dumps([{"text": "甲"}, {"text": "乙"}])},
+        files=[_wav_file(name=f"seg{i}.wav") for i in range(2)],
+    )
+
+    assert resp.status_code == 200
+
+
 def test_batch_limit_is_checked_before_reading_files() -> None:
     """段數上限存在的目的就是別把大請求收進記憶體，故須在讀檔前擋。
 

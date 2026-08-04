@@ -262,6 +262,7 @@ BFF 有一層 Origin 防護（`OriginGuardMiddleware`），規則是「來源存
 | 音訊有效但完全無語音 | `segments` 為空陣列，`duration` 為 `0.0`，HTTP 200。`alignment` 欄位結構完整回傳（`audio_duration` 為音檔實際長度，`speech_start`／`speech_end` 為 `null`，`aligned_duration` 為 `0`），**不報錯** |
 | 對齊服務不可用或逾時 | **HTTP 200**，逐字稿照常回傳，全段 `aligned: false`、`words` 為空、`Start`／`End` 維持切點語義。不回 502／504——逐字稿有獨立價值，不因評分這項附加功能失效而一併不可得 |
 | 單段對齊未通過合理性檢查 | 該段 `aligned: false`、`words` 為空、`Start`／`End` 退回切點，**其餘段照常**。攔下的是**結構性**問題：時間戳逆轉、落在該段音訊範圍外、對齊跨距不足該段長度的一半（此項不套用於首段與末段，因為頭尾沉默會壓低跨距，那是預期情境而非故障）、零長度段落、字級清單為空 |
+| 非語音區段（靜音、音樂、聽不清） | 模型輸出方括號標記為該段的 `Content`（`[Silence]`、`[Music]`、`[Unintelligible Speech]`），`Speaker` 為空字串。此類段落**不送對齊**，故恆為 `aligned: false`、`words` 為空（理由見下） |
 | 模型輸出非 JSON | `segments` 為空，`transcription_only` 為繁化後的原始文字，`raw_text` 保留原樣，HTTP 200 |
 | 模型輸出缺欄位 | 缺 `Start`／`End` 補 `0.0`，缺 `Speaker`／`Content` 補空字串，不報錯 |
 | 模型改用 `Start time` 等鍵名 | 自動相容（三重 fallback：`Start`／`start`／`Start time`） |
@@ -269,6 +270,12 @@ BFF 有一層 Origin 防護（`OriginGuardMiddleware`），規則是「來源存
 | `replace_context=true` 且 `extra_terms` 為空 | context 為空字串，等同不注入 Hotword |
 
 **評分端須處理「完全無語音」**：此時分母為 0，應視為零分或無效作答，而非讓計算炸開或得出 100% 流暢。
+
+**非語音標記段會出現在 `transcription_only` 裡。** 它是所有 Segment 的 `Content` 串接，故一段 `[Silence]` 會讓「Silence」這個英文詞出現在中文逐字稿中間。消費端若要純粹的逐字稿，須自行濾掉符合 `^\s*\[[^\]]*\]\s*$` 的段落。
+
+**後端目前不過濾，但這是待決事項而非定案（#39）。** 兩個方向各有代價：移除會讓消費端無從得知該時段發生了什麼，而那幾段仍留在 `segments` 裡，時間軸會出現無法解釋的空隙；不移除則每個消費端各自實作過濾。取決於 `transcription_only` 的實際用途（餵評分模型時標記是有用訊號，直接呈現給學員時是雜訊），故該票在確認用法前不動。
+
+這些段落不送對齊的理由：`qwen-asr` 的 tokenizer 只保留 Unicode 字母與數字，方括號被剝除後 `Silence` 會成為一個合法的 Word，模型會把它對到那段靜音上，產出一個**假的字級時間戳**。第一段若是 `[Silence]`，`alignment.speech_start` 會變成約 0，等於宣稱「沒有開頭沉默」，而開頭沉默是 ADR-0004 明文要求完整保留的訊號（#38）。
 
 ---
 

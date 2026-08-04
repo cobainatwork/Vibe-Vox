@@ -110,6 +110,12 @@ class Settings:
     aligner_timeout_seconds: float = field(
         default_factory=_env("VIBE_VOX_ALIGNER_TIMEOUT_SECONDS", "60", float)
     )
+    # 單次送去對齊的段數上限，**須與 aligner 服務端的同名變數一致或更小**。取值依據與
+    # 這條耦合的完整理由見 `adapters/aligner.py` 的 DEFAULT_MAX_BATCH_ITEMS；不變量由
+    # `test_config.py` 實際比對兩邊的設定檔守著，不靠註解（#35 的教訓）。
+    aligner_max_batch_items: int = field(
+        default_factory=_env("VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS", "32", int)
+    )
     # 逐段切片左右各留的 buffer（秒）。VibeVoice 的段界是模型自選切點而非發音邊界，
     # 可能落在某個字的發音中間；buffer 使邊界字的音訊完整落在切片內。取值依據見
     # adapters/aligner.py 的 DEFAULT_SLICE_BUFFER_SECONDS。
@@ -126,6 +132,19 @@ class Settings:
     ffmpeg_timeout_seconds: float = field(
         default_factory=_env("VIBE_VOX_FFMPEG_TIMEOUT_SECONDS", "60", float)
     )
+
+    def __post_init__(self) -> None:
+        """擋下會讓每個請求都壞掉的設定值。
+
+        batch size 小於 1 時分批會在執行期拋 `ValueError`，而端點只攔對齊服務的兩種
+        例外，故它會冒成 500 使**逐字稿一併失效**，正是 ADR-0004 第二層降級要避免的
+        結果。設定錯誤在啟動時就喊出來，而不是等每個辨識請求都壞掉才被發現。
+        """
+        if self.aligner_max_batch_items < 1:
+            raise ValueError(
+                "VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS 須至少為 1，"
+                f"得到 {self.aligner_max_batch_items}"
+            )
 
     def heavy_request_budget(self) -> float:
         """重量級端點（轉碼＋辨識＋對齊）的總體逾時預算。

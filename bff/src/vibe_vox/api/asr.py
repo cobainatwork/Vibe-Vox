@@ -47,19 +47,23 @@ def _parse_extra_terms(raw: str | None) -> list[str]:
 
 async def _align_or_degrade(
     aligner: AlignerClient, wav: Path, segments: list[Segment]
-) -> list[list[Word]]:
-    """取字級時間戳；服務不可用或逾時則回空清單，交由 merge_alignment 標記未對齊。
+) -> tuple[list[list[Word]], bool]:
+    """取字級時間戳，並回報對齊服務是否整體失敗。
 
-    這是 ADR-0004 兩層降級的第二層。**刻意不重試**：對齊是附加功能，為它延長
-    請求會拖累逐字稿的回應時間，而 aligner 服務端本身已對併發採 load-shed。
+    服務不可用或逾時則回空清單，交由 merge_alignment 標記未對齊。這是 ADR-0004 兩層
+    降級的第二層。**刻意不重試**：對齊是附加功能，為它延長請求會拖累逐字稿的回應
+    時間，而 aligner 服務端本身已對併發採 load-shed。
+
+    第二個回傳值供 merge_alignment 判斷該不該逐段記錄：全段同因時逐段記只會產生 N 條
+    相同訊息，把這裡記的原因推出畫面（#37）。
     """
     try:
-        return await aligner.align(wav, segments)
+        return await aligner.align(wav, segments), False
     except (AlignerTimeout, AlignerUnavailable) as exc:
-        # warning 而非 info：本專案無 logging 設定，info 會被靜默丟棄。不記的話，
-        # merge_alignment 會逐段記「字級清單為空」而讀 log 的人不知道是服務掛了。
+        # warning 而非 info：本專案無 logging 設定，info 會被靜默丟棄。%r 保留例外型別
+        # 與其攜帶的服務端錯誤碼（#37），兩者都是診斷的必要資訊。
         logger.warning("對齊服務不可用，全段降級為未對齊：%r", exc)
-        return [[] for _ in segments]
+        return [[] for _ in segments], True
 
 
 @router.post("/api/asr/transcribe")
@@ -90,13 +94,16 @@ async def transcribe(
         ) as wav:
             result = await asr.transcribe(wav, context=context)
             audio_duration = wav_duration(wav)
-            words = await _align_or_degrade(aligner, wav, result.segments)
+            words, aligner_failed = await _align_or_degrade(
+                aligner, wav, result.segments
+            )
 
     segments, alignment = merge_alignment(
         result.segments,
         words,
         audio_duration=audio_duration,
         slice_buffer=settings.aligner_slice_buffer_seconds,
+        aligner_failed=aligner_failed,
     )
     return result.model_dump() | {
         "segments": [s.model_dump() for s in segments],
