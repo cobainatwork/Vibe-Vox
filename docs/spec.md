@@ -93,7 +93,7 @@ Vibe-Vox 是一個 ASR/TTS 後端服務，同時服務兩類消費者。**消費
 - 模型呼叫藏在兩個 adapter 介面後面：`AsrClient` 與 `TtsClient`。BFF 只依賴這兩個介面，實作負責與 vLLM／Qwen3-TTS 溝通。此介面同時是唯一的測試 stub 邊界。
 - ASR 辨識走 vLLM 的 `/v1/chat/completions`（傳 audio 與 context prompt，回傳 Who/When/What 結構化 JSON）。不使用 `/v1/audio/transcriptions`，因其尚未實作且標準 schema 會弄丟 Speaker。
 - TTS 的 Preset＋Instruction、Voice clone、Voice design 三條路徑走原生 `qwen-tts` 語意（`generate_custom_voice` / `generate_voice_clone` / `generate_voice_design`）。標準 `/v1/audio/speech` 欄位不足以表達 Instruction 與參考音檔。
-- VRAM 協調：vLLM 的 `gpu_memory_utilization` 需壓低（起始值約 0.55 至 0.6）以替 TTS 進程保留空間，避免 OOM。
+- VRAM 協調：vLLM 的 `gpu_memory_utilization` 需壓低以替 TTS 進程保留空間，避免 OOM。本文原記「起始值約 0.55 至 0.6」，但該值**長期從未被實作**（跑在上游 `start_server.py` 的預設 0.8）；2026-08-05 已顯式設定並調至 0.70，實際值與待確認的容量帳見 HANDOFF.md 的 2.4 與 8.2（#31）。
 
 ### Hotword（單一扁平清單）
 

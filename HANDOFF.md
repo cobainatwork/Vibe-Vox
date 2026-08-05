@@ -96,7 +96,7 @@ ADR-0004 原本寫 3 至 4 GB 是估算，2026-08-04 的量測取代了它：
 
 **這個值有兩個讀取者**：BFF 用它決定怎麼分批，aligner 用它決定拒絕什麼。compose 以同一個表示式餵給兩個服務，**只調一邊就會回到 #36 的故障**（超出的批次換來 400，該批全段拿不到時間戳）。要調就改 `.env` 的單一項，兩邊會一起變，`bff/tests/test_config.py` 會讀兩邊的設定檔比對。
 
-### 2.4 vLLM 的三個記憶體參數：現在才第一次被選擇過
+### 2.4 vLLM 的三個記憶體參數：只有 utilization 會還記憶體給 GPU
 
 上游 `start_server.py` 的預設是 `--max-model-len 65536`、`--max-num-seqs 64`、`--gpu-memory-utilization 0.8`。**那三個值寫在 image 內的上游腳本裡，連 grep 都找不到**，而 ADR-0001 至今仍寫著 utilization 該壓到 0.55 至 0.6。這與 #35 的 nginx 預設 60 秒是同一個失效模式。
 
@@ -115,13 +115,33 @@ prompt 其餘   ≈ 100
 |---|---|---|---|
 | `--max-model-len` | 65536（約 62 分鐘） | **24576**（約 23 分鐘） | 使逾時（約 20 分鐘）仍是較先觸發的那一層，音檔長度上限的行為不變 |
 | `--max-num-seqs` | 64 | **8** | 對齊 BFF 的 `max_concurrent_heavy_requests` |
-| `--gpu-memory-utilization` | 0.8 | **0.8（未動）** | 前兩項釋出多少要量了才知道；這是最弱的槓桿 |
+| `--gpu-memory-utilization` | 0.8 | **0.70** | KV cache 由 9.92 降至 5.52 GiB，辨識文字逐字元不變 |
 
 **65536 不是隨意的值**：61 分鐘音檔（上游註解明列的模型上限）需要 64253 tokens，它剛好包住。所以降它是**刻意放棄一個我們不用的能力**，不是修正別人的疏失。
 
-實測依據：KV cache 共 185,680 tokens（9.92 GiB），一次 610 秒的辨識峰值只用 **4.0%**（約 7,400 tokens，其中音訊 4,580、輸出約 2,850）。utilization 0.8 時非 KV 部分佔 26214 MiB，故 KV cache 得到的是「預算減去該值」。**調降 utilization 前必須確認還裝得下一條 `max-model-len` 的序列**，否則 vLLM 拒絕啟動：0.6 只剩約 1065 MiB，而 24576 tokens 需約 1344 MiB（每 token 約 56 KiB），會起不來。
+**不要從 KV cache 的數字推算 vLLM 佔用多少。** 這 session 在這件事上算錯三次，包括「非 KV 部分等於預算減 KV」這個推導。`gpu_memory_utilization` 是**整張卡的總用量上限**（含其他行程），不是 vLLM 自己的預算，所以「預算減 KV」那個殘差裡混著 aligner 的佔用與 vLLM 刻意留的餘裕，不是權重加 activation。要 vLLM 的佔用只能量：
 
-**尚未量測**：改成 8192／8 之後釋出多少。`--enable-chunked-prefill` 已開，profiling 的 activation 預留受 `max_num_batched_tokens` 約束，與 `max-model-len` 未必成正比，故不預測。部署後讀 `docker logs vibe-vox-vllm-1 | grep -iE "Available KV cache memory|GPU KV cache size"` 與 `nvidia-smi` 即知，那個數字就是 TTS 能拿到多少的答案（#31）。
+```bash
+nvidia-smi --query-compute-apps=pid,gpu_uuid,used_memory --format=csv
+```
+
+**已量到的（2026-08-05）**：
+
+| | 原始（0.8、65536、64） | 現在（0.70、24576、8） |
+|---|---|---|
+| KV cache | 9.92 GiB／185,680 tokens | **5.52 GiB／103,264 tokens** |
+| vLLM 行程佔用 | 38615 MiB（OOM 訊息） | **約 25188 MiB**，見下 |
+
+25188 這個數字**尚未完全確認**：`nvidia-smi` 未帶 GPU 欄位時回四個行程（2186、25188、9918、23200），而 `9918 + 23200 = 33118` 恰等於 7.4 記載的 GPU 1 用量，故 GPU 0 上應是 aligner 2186 加 vLLM 25188。**要確認得用上面那行帶 `gpu_uuid` 的查詢。**
+
+若 25188 成立，則兩次改動共釋出約 13.4 GB。而 25188 甚至低於 0.70 的「預算」31826，這正是上述推導不成立的直接證據：當初依那個推導算出的「釋出 4547 MiB」與此差了三倍。
+
+**辨識行為以那份 10 分鐘會議錄音驗證過**，結論分兩層：
+
+- **文字完全穩定**：63 段、53 段對齊、2481 字，`transcription_only`、每段 `Content`、每個 Word 的 `Text` **全部逐字元相同**。先前擔心的「批次組成改變使近乎平手的 token 翻面」沒有發生。
+- **時間戳不穩定，且幅度比預期大**：332 個時間戳欄位有差異，**最大 0.47 秒**（第 61 段 `Start` 573.96 → 573.49），53 個欄位差超過 0.05 秒。ASR 自身的切點只動 ±0.01 秒，但切片邊界跟著位移後，**aligner 把它放大了約 47 倍**。
+
+第二點對 #32 有意義：**字級時間戳的跨次重現性只到約 0.5 秒**，評分端不能假設比這更精細的可靠度。彙總值反而穩定（`aligned_duration` 532.24 → 532.56，差 0.06%）。
 
 **同一份腳本還有另一個問題**：它每次啟動都跑 `apt-get` 與 `pip install`（實際 log 可見 `Requirement already satisfied`），使容器執行期依賴網路、且 image 不可重現。腳本有 `--skip-deps` 可跳過，但需先確認它是否也跳過 pip 那步。追蹤於 #41，未動工。
 
@@ -527,20 +547,28 @@ aligner 不可用時 ASR 逐字稿仍須照常回傳（ADR-0004 的第二層降�
 
 ### 8.2 #31：三個模型能否共存於這張卡
 
-**參數已可設定**（2026-08-05，見 2.4），本票剩下的是「三個模型擠不擠得進 45465 MiB」。
+**空間可能已足夠，但三個數字都還沒定案**（2026-08-05，參數與已量到的見 2.4）。
 
-算術：vLLM 38615（utilization 0.8）加 aligner 2728（日常負載實測）已用 41343，剩 **4122 MiB**，而 ADR 記 VoxCPM2 約需 8192。**差約 4 GB**，且唯一還是估算的那項就算高估一半也不夠。
+| 項目 | 值 | 狀態 |
+|---|---|---|
+| GPU 0 容量 | 46068 MiB | 已量（7.4） |
+| vLLM（0.70／24576／8） | 約 25188 MiB | **待確認**，見 2.4 的 `gpu_uuid` 查詢 |
+| aligner | 2186 MiB idle／2728 日常負載 | **前者剛量到，後者是 0.8 時代的值** |
+| VoxCPM2 需求 | 約 8192 MiB | **估算，非實測** |
 
-**兩個量測決定怎麼做，都還沒做：**
+若三者都成立，剩餘約 18 GB，遠多於 TTS 所需。但**沒有一項是定案的**，所以現在不能宣告「裝得下」。
 
-1. **VoxCPM2 的實際佔用。** 8 GiB 是 ADR-0004 的估算。`spike/voxcpm-tts` 有可跑的 Docker harness。這是 #14 的產出，故本票排在 TTS 線後面。
-2. **改成 `max-model-len 24576`、`max-num-seqs 8` 之後釋出多少。** `--enable-chunked-prefill` 已開，profiling 的 activation 預留受 `max_num_batched_tokens` 約束，與 `max-model-len` 未必成正比，**不預測**。部署後讀 `docker logs vibe-vox-vllm-1 | grep -iE "Available KV cache memory|GPU KV cache size"` 與 `nvidia-smi` 即知。
+**三個量測，依可立即進行的程度排序：**
 
-**若那兩項還不夠，剩下的槓桿依代價由小到大**：utilization（受「須裝得下一條 `max-model-len` 序列」約束，見 2.4）、再降 `max-model-len`（會使長音檔改為立刻回 400，須同步 `docs/api/asr.md` §3.3 與 `frontend/src/asr.ts`）、`kv-cache-dtype fp8`（動數值精度，**必須做逐字稿的逐字元 diff**，不能只確認服務起得來）。
+1. **vLLM 的實際佔用**：一行 `nvidia-smi --query-compute-apps=pid,gpu_uuid,used_memory --format=csv`，隨時可做。
+2. **aligner 在新 batch 上限（8）下的峰值**：2728 是 batch 32 時代的累積量測，而 2.2 已宣告那組數字不能當容量依據。要重測須先讓 `bench_batch.py` 吃真實錄音的段長分布（見該檔的偏差警告）。
+3. **VoxCPM2 的實際佔用**：`spike/voxcpm-tts` 有可跑的 Docker harness。這是 #14 的第一步，故本票仍排在 TTS 線後面。
+
+**若量完發現仍不夠，剩下的槓桿依代價由小到大**：再降 utilization（下限由「KV cache 須裝得下一條 `max-model-len` 序列」決定，每 token 約 56 KiB）、降 `max-model-len`（會使長音檔改為立刻回 400 而非等到逾時，須同步 `docs/api/asr.md` §3.3 與 `frontend/src/asr.ts`）、`kv-cache-dtype fp8`（動數值精度，**必須做逐字稿的逐字元 diff**，不能只確認服務起得來）。
 
 ### 8.3 ADR-0001 需重寫
 
-它的整套 VRAM 協調論述建立在「單張卡」之上（見 7.4），且其 `gpu_memory_utilization` 0.55 至 0.6 的假設**從未被實作，至今仍與現況衝突**（實際為 0.8，見 2.4）。#19 是「新 ADR 取代 ADR-0001」的票，該票須納入兩張卡、第二張被別的專案動態佔用、以及三個記憶體參數的實際值這三項事實。
+它的整套 VRAM 協調論述建立在「單張卡」之上（見 7.4），且其 `gpu_memory_utilization` 0.55 至 0.6 的假設**長期從未被實作**（實際跑在上游預設 0.8），2026-08-05 才第一次被顯式設定並調至 0.70（見 2.4）。#19 是「新 ADR 取代 ADR-0001」的票，該票須納入兩張卡、第二張被別的專案動態佔用、以及三個記憶體參數的實際值這三項事實。
 
 **這個衝突目前是明知而未解的**：`docs/agents/domain.md` 要求與既有 ADR 衝突時明確標示而非默默覆蓋，故 2.4 與 ADR-0004 都已註明 ADR-0001 仍寫著 0.55 至 0.6。真正的修正在 #19。
 

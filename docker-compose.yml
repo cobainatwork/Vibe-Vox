@@ -60,7 +60,7 @@ services:
       - --max-num-seqs
       - "${VIBE_VOX_VLLM_MAX_NUM_SEQS:-8}"
       - --gpu-memory-utilization
-      - "${VIBE_VOX_VLLM_GPU_MEMORY_UTILIZATION:-0.8}"
+      - "${VIBE_VOX_VLLM_GPU_MEMORY_UTILIZATION:-0.70}"
     ipc: host   # vLLM 需要（官方 docker run 用 --ipc=host）
     networks:
       - vibe

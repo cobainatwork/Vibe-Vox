@@ -143,9 +143,9 @@ GPU 1  gpustack 的 qwen3.6-35b 與 gemma-4-12b                       餘 12934 
 
 ADR-0004 記 VoxCPM2 約需 8 GiB，但**那是估算值而非實測**。餘裕 5450 MiB 與它同一量級，所以要先實測 VoxCPM2 的實際佔用才能判斷是否放得下——不能只憑估算就斷定不行。
 
-不論結果如何，有一項與 ADR 不符的事實需處理：**ADR-0001 至今仍假設 vLLM 用 `gpu_memory_utilization` 0.55–0.6，而實際值是 0.8**，故多吃約 10 GB。aligner 反而比估算少用 1–2 GB。
+上表寫於 2026-08-04，當時 vLLM 的 `gpu_memory_utilization` **從未被顯式設定**、跑在上游 `start_server.py` 的預設 0.8，而 ADR-0001 一直假設 0.55–0.6，故 vLLM 多吃約 10 GB。aligner 反而比估算少用 1–2 GB。
 
-該參數原本從未被顯式設定（`docker/vllm.Dockerfile` 直接跑官方 `start_server.py`，跑在其預設）；2026-08-05 已與 `--max-model-len`、`--max-num-seqs` 一併搬到 `docker-compose.yml` 並由 `.env` 覆寫，見 HANDOFF.md 的 2.4。值本身尚未調整，等 VoxCPM2 的實測佔用（#31）。
+2026-08-05 三個記憶體參數已搬到 `docker-compose.yml` 並由 `.env` 覆寫，utilization 調至 0.70。**故上表的餘裕數字已過期**，最新狀態與待確認項見 HANDOFF.md 的 2.4 與 8.2（#31）。
 
 完整的實測對照與後續選項記於 ADR-0004 的 Consequences 與 #31。不屬 #26 的交付範圍。
 
