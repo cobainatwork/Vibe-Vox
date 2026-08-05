@@ -97,21 +97,39 @@ def test_batch_size_below_one_fails_at_startup(monkeypatch, value):
         Settings()
 
 
-def _compose_env_by_service(variable: str) -> dict[str, str]:
-    """讀 docker-compose.yml，回傳各服務為該環境變數設的值（未設的服務不列入）。
+def _compose_services() -> dict[str, str]:
+    """讀 docker-compose.yml，回傳服務名到該服務整段內容（原文）的對照。
 
-    刻意不引入 YAML 依賴：只為一條測試加執行期相依不值得，而以服務層縮排切塊已足夠
+    刻意不引入 YAML 依賴：只為測試加執行期相依不值得，而以服務層縮排切塊已足夠
     （本檔的服務鍵一律兩格縮排且後方無值）。
     """
     compose = Path(__file__).resolve().parents[2] / "docker-compose.yml"
     blocks = re.split(r"^  ([\w-]+):$", compose.read_text("utf-8"), flags=re.M)
     # split 後的形狀為 [前言, 服務名, 內容, 服務名, 內容, ...]
+    return dict(zip(blocks[1::2], blocks[2::2]))
+
+
+def _compose_env_by_service(variable: str) -> dict[str, str]:
+    """各服務為該環境變數設的值（未設的服務不列入）。"""
     found: dict[str, str] = {}
-    for name, body in zip(blocks[1::2], blocks[2::2]):
+    for name, body in _compose_services().items():
         m = re.search(rf"^\s*{variable}:\s*(.+?)\s*$", body, re.M)
         if m is not None:
             found[name] = m.group(1)
     return found
+
+
+@pytest.mark.parametrize(
+    "flag", ["--max-model-len", "--max-num-seqs", "--gpu-memory-utilization"]
+)
+def test_vllm_memory_params_are_set_explicitly(flag):
+    # **這條測的是「有沒有被選擇過」，不是值本身**；取值依據見 HANDOFF.md 的 2.4。
+    #
+    # #35 的根因是沒人選過的預設值（nginx 的 60 秒）成了系統的實際上限。同一個失效模式在
+    # 此更隱蔽：這三個值寫在 image 內的上游腳本裡，連 grep 都找不到。
+    assert flag in _compose_services()["vllm"], (
+        f"vllm 服務未顯式設定 {flag}，會落回上游腳本的預設值"
+    )
 
 
 def test_batch_size_is_wired_to_both_services_identically():

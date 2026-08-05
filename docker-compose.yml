@@ -48,6 +48,19 @@ services:
     build:
       context: .
       dockerfile: docker/vllm.Dockerfile
+    # **三個記憶體參數必須顯式列在這裡。** 不列的後果不是「用了不好的值」，而是那三個值
+    # 寫在 image 內的上游 start_server.py 裡、連 grep 都找不到，而 ADR-0001 至今仍寫著
+    # utilization 該壓到 0.55–0.6。這與 #35 的 nginx 預設 60 秒是同一個失效模式。
+    # 取值依據見 .env.example 與 HANDOFF.md 2.4；不變量由 bff/tests/test_config.py 守著。
+    command:
+      - python3
+      - /app/vllm_plugin/scripts/start_server.py
+      - --max-model-len
+      - "${VIBE_VOX_VLLM_MAX_MODEL_LEN:-24576}"
+      - --max-num-seqs
+      - "${VIBE_VOX_VLLM_MAX_NUM_SEQS:-8}"
+      - --gpu-memory-utilization
+      - "${VIBE_VOX_VLLM_GPU_MEMORY_UTILIZATION:-0.8}"
     ipc: host   # vLLM 需要（官方 docker run 用 --ipc=host）
     networks:
       - vibe
