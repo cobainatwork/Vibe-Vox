@@ -354,6 +354,7 @@ curl -X POST http://10.2.66.102:8088/api/asr/transcribe \
 
 ## 8. 相關文件
 
+- `tts.md`：TTS 端點規格（尚未實作）
 - ADR-0003：消費端 REST 契約的決策與取捨
 - ADR-0004：字級強制對齊的決策，含 §4.4 各欄位與合理性檢查的完整理由
 - `CONTEXT.md`：Segment、Word、Forced alignment、對齊狀態的詞彙定義

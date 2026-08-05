@@ -1,6 +1,6 @@
 # CLAUDE.md — Vibe-Vox 專案指引
 
-Vibe-Vox 是自架的 ASR/TTS 後端（VibeVoice-ASR + Qwen3-TTS），為 `D:\pro\AI_practise` 智能陪練平台的 ASR/TTS 供應端，另含供操作者設定與測試的管理平面。設計脈絡見 `CONTEXT.md`（領域詞彙）、`docs/spec.md`（規格）、`docs/adr/`（架構決策）。
+Vibe-Vox 是自架的 ASR/TTS 後端（VibeVoice-ASR + VoxCPM2），為 `D:\pro\AI_practise` 智能陪練平台的 ASR/TTS 供應端，另含供操作者設定與測試的管理平面。設計脈絡見 `CONTEXT.md`（領域詞彙）、`docs/spec.md`（規格）、`docs/adr/`（架構決策）。
 
 ## Agent skills
 

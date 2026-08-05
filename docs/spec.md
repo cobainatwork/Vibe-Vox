@@ -1,23 +1,23 @@
 # Spec：Vibe-Vox ASR/TTS 測試與管理平台
 
-本 spec 由 grill-with-docs 對話合成，使用 [CONTEXT.md](../CONTEXT.md) 的領域詞彙，並遵守 [ADR-0001 解耦模型服務](./adr/0001-decoupled-model-serving.md) 與 [ADR-0002 Voice design 定版](./adr/0002-design-voice-pinned-on-create.md)。
+本 spec 由 grill-with-docs 對話合成，使用 [CONTEXT.md](../CONTEXT.md) 的領域詞彙，並遵守 [ADR-0002 Voice design 定版](./adr/0002-design-voice-pinned-on-create.md)。
 
 ## Problem Statement
 
-AI_practise（智能陪練平台）需要一個自架的 ASR/TTS 後端來驅動「AI 客戶語音對練」：學員以語音應對、系統辨識後餵 LLM 與客觀指標（語速、開口時長、流暢度），再以 TTS 讓 AI 客戶開口。其現行後端為 VibeVoice-ASR + CosyVoice 的 :8088 服務；現在要把 TTS 換成 Qwen3-TTS，並重新檢視傳輸方式（見 ADR-0003）。
+AI_practise（智能陪練平台）需要一個自架的 ASR/TTS 後端來驅動「AI 客戶語音對練」：學員以語音應對、系統辨識後餵 LLM 與客觀指標（語速、開口時長、流暢度），再以 TTS 讓 AI 客戶開口。其現行後端為 VibeVoice-ASR + CosyVoice 的 :8088 服務；現在要把 TTS 換成 VoxCPM2，並重新檢視傳輸方式（見 ADR-0003）。
 
 同時，操作者需要一個地方設定與測試這套 ASR/TTS：維護會影響辨識準確度的 Hotword、上傳音檔驗證辨識、以及建立與管理可重複使用的 TTS 音色，快速驗證「換了 Hotword、換了音色、換了 Instruction」對輸出的實際影響。缺少統一介面時，這些只能靠原廠 demo 與命令列腳本零散進行。
 
 ## Solution
 
-Vibe-Vox 是一個 ASR/TTS 後端服務，同時服務兩類消費者。**消費端資料平面**以 REST 契約供 AI_practise 呼叫，取代其現行 VibeVoice-ASR + CosyVoice 的 :8088 服務，把 TTS 換為 Qwen3-TTS。**管理平面**是一個統一操作頁，供操作者設定與測試同一後端。管理平面讓操作者完成四件事：
+Vibe-Vox 是一個 ASR/TTS 後端服務，同時服務兩類消費者。**消費端資料平面**以 REST 契約供 AI_practise 呼叫，取代其現行 VibeVoice-ASR + CosyVoice 的 :8088 服務，把 TTS 換為 VoxCPM2。**管理平面**是一個統一操作頁，供操作者設定與測試同一後端。管理平面讓操作者完成四件事：
 
 1. 管理 Hotword 清單（新增、編輯、刪除、啟用切換、匯入、匯出），辨識時系統自動把啟用中的 Hotword 編譯成 context 注入 ASR。
 2. 上傳常見格式音檔做 ASR 測試，取得帶語者與時間戳的 Who/When/What 結果，並可臨時覆寫本次 context。
-3. 做 TTS 測試：輸入文字、選語言、選音色、對支援的音色下 Instruction（附範例），即時試聽與下載。
-4. 管理音色：以參考音檔建立 Voice clone、以文字描述建立並定版 Voice design，並可試聽、編輯、刪除；內建 9 個 Preset speaker 為唯讀。
+3. 做 TTS 測試：輸入文字、選語言、選音色、下 Instruction（附範例），即時試聽與下載。
+4. 管理音色：以參考音檔建立 Voice clone、以文字描述建立並定版 Voice design，並可試聽、編輯、刪除。系統不附任何音色，全部由人建立。
 
-介面誠實反映模型能力邊界：選到 Voice clone 時，Instruction 欄位停用並說明原因（能力感知）。
+介面誠實反映模型能力邊界（能力感知）。
 
 ## User Stories
 
@@ -56,9 +56,9 @@ Vibe-Vox 是一個 ASR/TTS 後端服務，同時服務兩類消費者。**消費
 
 26. 作為操作者，我想輸入要合成的文字，以便測試發音效果。
 27. 作為操作者，我想選擇語言，以便符合文字內容。
-28. 作為操作者，我想從依 Preset / Clone / Design 分組的下拉選單選擇音色，以便比較不同音色。
-29. 作為操作者，對支援 Instruction 的音色，我想輸入語氣、情緒、韻律的 Instruction，以便控制表現。
-30. 作為操作者，當我選到 Voice clone 音色時，我想看到 Instruction 欄位停用並說明「此音色類型不支援 Instruction」，以便理解能力邊界而不被誤導。
+28. 作為操作者，我想從依 Clone / Design 分組的下拉選單選擇音色，以便比較不同音色。
+29. 作為操作者，我想對任一音色輸入語氣、情緒、韻律的 Instruction，以便控制表現。
+30. 作為操作者，我想在音色管理頁看到「Voice clone 走可控情緒模式而非最高保真模式」的說明，以便理解聲線相似度的取捨來自平台決策，而不誤判為 clone 品質不良。
 31. 作為操作者，我想看到並一鍵套用 Instruction 範例，以便快速上手指令寫法。
 32. 作為操作者，我想送出合成並取得音訊，以便試聽。
 33. 作為操作者，我想在頁面內嵌播放合成結果，以便即時聆聽。
@@ -67,7 +67,7 @@ Vibe-Vox 是一個 ASR/TTS 後端服務，同時服務兩類消費者。**消費
 
 ### 音色管理
 
-36. 作為操作者，我想檢視所有音色，包含唯讀的 9 個 Preset speaker，以便掌握可用音色。
+36. 作為操作者，我想檢視所有音色，以便掌握可用音色。
 37. 作為操作者，我想上傳參考音檔與逐字稿建立 Voice clone 音色（含名稱與語言），以便重複使用自訂音色。
 38. 作為操作者，我想以文字描述建立 Voice design 音色並在建立時定版，以便得到穩定可重現的音色。
 39. 作為操作者，我想試聽任一音色，以便決定是否採用。
@@ -75,25 +75,28 @@ Vibe-Vox 是一個 ASR/TTS 後端服務，同時服務兩類消費者。**消費
 41. 作為操作者，我想更換 Voice clone 的參考音檔或修改其逐字稿，以便修正 clone 品質。
 42. 作為操作者，我想修改 Voice design 的描述並重新定版，以便調整音色。
 43. 作為操作者，我想刪除自建音色，以便清理不需要的項目。
-44. 作為操作者，當我嘗試刪除或編輯 Preset speaker 時，我想被明確阻止並說明其為唯讀，以便避免誤操作。
-45. 作為操作者，當我建立的音色名稱與既有名稱重複時，我想看到清楚錯誤，以便改名。
-46. 作為操作者，當參考音檔格式或長度不符需求時，我想看到清楚提示，以便更換。
+44. 作為操作者，當我建立的音色名稱與既有名稱重複時，我想看到清楚錯誤，以便改名。
+45. 作為操作者，當參考音檔格式或長度不符需求時，我想看到清楚提示，以便更換。
 
 ### 系統與維運
 
-47. 作為操作者，我想看到健康檢查顯示 ASR 與 TTS 兩個模型服務的就緒狀態，以便確認系統可用。
-48. 作為操作者，當某個模型服務尚未就緒時，我想在相關頁面看到清楚提示與停用送出，以便避免無效操作。
+46. 作為操作者，我想看到健康檢查顯示 ASR 與 TTS 兩個模型服務的就緒狀態，以便確認系統可用。
+47. 作為操作者，當某個模型服務尚未就緒時，我想在相關頁面看到清楚提示與停用送出，以便避免無效操作。
 
 ## Implementation Decisions
 
-### 架構與模型服務（依 ADR-0001）
+### 架構與模型服務
 
-- 系統由四個部署單元組成：React + Vite 前端、FastAPI BFF、vLLM 承載 VibeVoice-ASR、獨立進程承載 Qwen3-TTS。全部以 Docker Compose 編排，透過 nvidia-container-toolkit 共用單張 RTX 6000 Ada 48GB。
-- BFF 為應用後端（不載入模型），內部以模組邊界明確拆分三塊職責：(1) API 與編排（請求驗證、路由、呼叫模型端點）、(2) 檔案與轉碼（上傳落地、FFmpeg 轉碼、參考音存取）、(3) 持久化（SQLite 存取）。稱其相對於模型服務為「薄」是指不承載模型，而非職責少；此為 ADR-0001 刻意採用的模組化單體，不再向微服務拆分。
-- 模型呼叫藏在兩個 adapter 介面後面：`AsrClient` 與 `TtsClient`。BFF 只依賴這兩個介面，實作負責與 vLLM／Qwen3-TTS 溝通。此介面同時是唯一的測試 stub 邊界。
+- 系統由五個部署單元組成：React + Vite 前端（nginx）、FastAPI BFF、vLLM 承載 VibeVoice-ASR、獨立服務承載 Qwen3-ForcedAligner、vLLM-Omni 承載 VoxCPM2。全部以 Docker Compose 編排，透過 nvidia-container-toolkit 取用 GPU。機器有兩張卡；GPU 1 被非本專案的工作負載動態佔用，其餘裕不可假設穩定，故 GPU 服務全釘在 `device_ids: ["0"]`。
+- BFF 為應用後端（不載入模型），內部以模組邊界明確拆分三塊職責：(1) API 與編排（請求驗證、路由、呼叫模型端點）、(2) 檔案與轉碼（上傳落地、FFmpeg 轉碼、參考音存取）、(3) 持久化（SQLite 存取）。稱其相對於模型服務為「薄」是指不承載模型，而非職責少；採模組化單體，不向微服務拆分。
+- 模型呼叫藏在兩個 adapter 介面後面：`AsrClient` 與 `TtsClient`。BFF 只依賴這兩個介面，實作負責與 vLLM／vLLM-Omni 溝通。此介面同時是唯一的測試 stub 邊界。
 - ASR 辨識走 vLLM 的 `/v1/chat/completions`（傳 audio 與 context prompt，回傳 Who/When/What 結構化 JSON）。不使用 `/v1/audio/transcriptions`，因其尚未實作且標準 schema 會弄丟 Speaker。
-- TTS 的 Preset＋Instruction、Voice clone、Voice design 三條路徑走原生 `qwen-tts` 語意（`generate_custom_voice` / `generate_voice_clone` / `generate_voice_design`）。標準 `/v1/audio/speech` 欄位不足以表達 Instruction 與參考音檔。
-- VRAM 協調：vLLM 的 `gpu_memory_utilization` 需壓低以替 TTS 進程保留空間，避免 OOM。本文原記「起始值約 0.55 至 0.6」，但該值**長期從未被實作**（跑在上游 `start_server.py` 的預設 0.8）；2026-08-05 已顯式設定並調至 0.70，實際值與待確認的容量帳見 HANDOFF.md 的 2.4 與 8.2（#31）。
+- TTS 合成走 vLLM-Omni 的 OpenAI 相容 `/v1/audio/speech`，服務以 `vllm serve openbmb/VoxCPM2 --omni` 啟動。
+- 參考音經擴充欄位 `ref_audio` 以 `data:` base64 傳入。不用 `file://`，因其需 server 開 `--allowed-local-media-path`，會擴大容器的檔案系統暴露面。參考音時長的伺服器端限制為 1.0 至 30.0 秒，adapter 須在送出前自行驗，因為超界時端點回的是 `ValueError` 文字而非本專案的錯誤碼。
+- **Instruction 以 `(...)` 前綴寫進 `input`，不經任何欄位。** `instructions` 與 `task_type` 對 VoxCPM2 不生效且不報錯——送了會得到 HTTP 200 加一段沒有情緒的音訊。BFF 不送這兩個欄位。
+- 一次 request 只承載一種風格，逐句不同情緒即逐句一次呼叫。切句與組風格前綴在 `TtsClient` 之上完成，`synthesize()` 收已切好的句子與各自風格，中文斷句規則不進 HTTP client。
+- 端點回 48 kHz mono，adapter 降為消費端契約要求的 24 kHz／mono／16-bit。
+- VRAM 協調：`gpu_memory_utilization` 是 per-instance 上限，不是同卡多實例瓜分的總額。約束為「本實例啟動當下的 free memory ≥ total × 自己的 utilization」，不足時在啟動期直接拒絕而非推論期 OOM。KV 尺寸以 `kv_cache_memory_bytes` 顯式封頂，封頂後不看 utilization。ASR 側現值 0.70。三個服務能否共存於 GPU 0 尚未實測，量測程序見 #31。
 
 ### Hotword（單一扁平清單）
 
@@ -112,20 +115,19 @@ Vibe-Vox 是一個 ASR/TTS 後端服務，同時服務兩類消費者。**消費
 - Voice 型別 shape：
 
   ```
-  Voice = { id, name (唯一), type ('preset'|'clone'|'design'), language,
-            speaker?,           // preset
-            ref_audio_path?,    // clone 與 design
-            ref_text?,          // clone
+  Voice = { id, name (唯一), type ('clone'|'design'), language,
+            ref_audio_path,     // 兩型皆有：clone 為上傳的參考音，design 為定版擷取的生成音
+            ref_text?,          // clone 的參考音逐字稿，管理用 metadata
             instruct?,          // design 的原始描述，定版後為 metadata
             created_at, updated_at }
   ```
 
 - 參考音檔存於檔案系統，metadata 存於資料庫，不以 DB blob 儲存音檔。
-- Preset speaker 為唯讀種子資料（9 個），不可編輯或刪除。
-- 建立 Voice design 時執行一次生成、擷取輸出音檔存為 `ref_audio_path`（定版）；之後 clone 與 design 音色在合成時共用同一條 clone 播放路徑。
+- 建立 Voice design 時執行一次生成、擷取輸出音檔存為 `ref_audio_path`（定版）；之後 clone 與 design 音色在合成時共用同一條 clone 播放路徑。定版音檔以端點原生的 48 kHz 存放，不存降採樣後的版本。
 - 建立 clone 與 design 音色為跨元件操作（模型呼叫加 DB 寫入），採「先產物後落庫」順序：先成功產生並落地參考音檔（clone 為驗證後的上傳檔、design 為定版生成檔）於暫存區，確認成功後才寫入 DB 紀錄並把檔案移入正式路徑；任一步失敗則清除暫存檔且不留 DB 紀錄，避免產生缺少 `ref_audio_path` 的損壞列。
 - 刪除自建音色時，實體參考音檔採軟刪除或移入待清理區，不在刪除當下立即 `rm`：先移除 DB 紀錄使新的合成無法再引用，實體檔由背景或啟動時的清理程序於寬限期後回收。合成一律在請求起始解析檔案且模型呼叫序列化，以縮小刪除與讀取的競態窗口，避免進行中的合成因檔案消失而崩潰，同時防止只刪 DB 造成的儲存空間洩漏。
-- 合成時的能力感知規則由 BFF 依 `type` 判定：`type` 為 `clone` 時忽略並拒收 Instruction；`preset` 與 `design` 接受 Instruction。前端據此啟用或停用欄位。
+- **合成一律走 Controllable 模式**：送出參考音但**不送 `ref_text`**，兩型音色都吃 Instruction。此為平台固定行為，不暴露為使用者選項，故 Instruction 欄位無停用態。代價是放棄 Hi-Fi 模式的聲紋相似度，該差異的量級未實測。
+- 模式由「送不送 `ref_text`」決定，與音色型別無關：送了就落到 Hi-Fi 並忽略 Instruction，且**失效是靜默的**（回 200、有音訊、沒有情緒）。`ref_text` 僅為管理用 metadata，不得進入合成路徑。
 
 ### 消費端契約（給 AI_practise，REST）
 
@@ -133,7 +135,7 @@ Vibe-Vox 是一個 ASR/TTS 後端服務，同時服務兩類消費者。**消費
 
 - ASR：`POST /api/asr/transcribe`，multipart 音訊 → `{ segments:[{Start,End,Speaker,Content}], ... }`。回合制批次辨識（VibeVoice-ASR 單次批次），非邊講邊出的即時 partial。
 - Hotwords：`GET`／`POST`／`DELETE /api/hotwords`，消費端形狀為 `{id, word}`（`POST` body `{word}`、`DELETE` 回 `{success:true}`）。管理平面在同一資源額外提供 `note`／`enabled`／匯入匯出，但不改變消費端既有欄位與行為。
-- TTS：`GET /api/tts/models`、`GET /api/tts/voices`（`{preset_voices, custom_voices:[{id,name,text}]}`；custom_voices 即 clone 音色、`text` 為 ref_text，preset_voices 對應 9 個 Qwen 語者）、`POST /api/tts/speech`（OpenAI 相容：`model, input, voice=id, response_format: wav|mp3, stream: bool`）→ 二進位音訊；wav 須 24kHz／mono／16-bit 以供消費端剝頭成 PCM；`stream=true` 時分塊回應、末塊為終幀。
+- TTS：`GET /api/tts/models`、`GET /api/tts/voices`（`{voices:[{id,name,type,language}]}`）、`POST /api/tts/speech`（OpenAI 相容加擴充：`model, input, voice=id, response_format: wav|mp3|pcm, stream, instruct`）→ 二進位音訊；wav 為 24kHz／mono／16-bit，`pcm` 為同規格的裸資料；`stream=true` 時分塊回應，結束以連線正常關閉表示。完整契約見 `docs/api/tts.md`。
 - 對齊現行部署慣例：地端、無認證/TLS。ASR 由現行 WebSocket 改為 REST，AI_practise 需新增 REST 版 AsrProvider（provider 可插拔，成本低）。
 
 ### 管理平面 API 契約（與唯一測試 seam）
@@ -146,10 +148,10 @@ Vibe-Vox 是一個 ASR/TTS 後端服務，同時服務兩類消費者。**消費
     duration, applied_context }
   ```
 
-- TTS：列出音色；建立 clone（multipart：name、language、參考音、ref_text）；建立 design（name、language、instruct，伺服器端定版）；更新音色；刪除音色；合成端點接收 text、language、voice_id、選填 instruct，回傳 wav；Instruction 範例端點回傳策展清單。
+- TTS：列出音色；建立 clone（multipart：name、language、參考音、選填 ref_text）；建立 design（name、language、instruct，伺服器端定版）；更新音色；刪除音色；合成端點接收 text、language、voice_id、選填 instruct，回傳 wav；Instruction 範例端點回傳策展清單。`instruct` 由 BFF 組成 `(...)` 前綴併入送給模型的文字。
 - 系統：健康檢查端點回報兩個模型服務的就緒狀態。
 - 統一回應與錯誤格式：成功回 `data`，錯誤回帶 `code` 與 `message` 的結構，錯誤語意對齊 Status／Root Cause／Suggested Fix。
-- 資源與狀態碼：所有接受上傳的端點宣告 `max_file_size` 與請求逾時；超過檔案上限回 413，context 超出 token 預算回 413 或 400，格式或標頭驗證失敗回 400，音色名稱重複回 409，刪除或編輯 Preset speaker 回 403。
+- 資源與狀態碼：所有接受上傳的端點宣告 `max_file_size` 與請求逾時；超過檔案上限回 413，context 超出 token 預算回 413 或 400，格式或標頭驗證失敗回 400，音色名稱重複回 409。
 
 ### 音檔處理
 
@@ -175,11 +177,11 @@ Vibe-Vox 是一個 ASR/TTS 後端服務，同時服務兩類消費者。**消費
 ## Testing Decisions
 
 - 好的測試只驗證對外行為，不驗證實作細節。對本專案，對外行為即 BFF HTTP API 的請求與回應。
-- 唯一測試 seam 為 BFF HTTP API。所有整合測試在此層進行，涵蓋 Hotword CRUD 與 context 編譯、匯入匯出、ASR 辨識編排、TTS 合成、音色 CRUD 與 design 定版、能力感知的 Instruction 規則。
+- 唯一測試 seam 為 BFF HTTP API。所有整合測試在此層進行，涵蓋 Hotword CRUD 與 context 編譯、匯入匯出、ASR 辨識編排、TTS 合成、音色 CRUD 與 design 定版、以及「兩型音色皆接受 Instruction 且 `ref_text` 不進入合成路徑」。
 - `AsrClient` 與 `TtsClient` 在測試中以 stub 取代，回傳固定的假結果（例如固定的 Segment 陣列、固定的 wav 位元組），使 HTTP API 測試離線、確定性、無需 GPU。
-- 需測試的模組：BFF 的路由與編排邏輯、Hotword context 編譯器、音檔轉檔器（以小型樣本檔）、能力感知規則。
-- 前端主要共用同一組 HTTP API 契約做測試；但能力感知的 Instruction 啟用或停用是純前端狀態邏輯，重構時極易被破壞，故對此狀態機保留一個最低限度的元件測試為必要項，而非選配。
-- 先驗證條件（每個 User Story 對應一條可檢查的 API 行為）：辨識回傳含 Segment 與純文字；停用的 Hotword 不進 context；clone 音色送 Instruction 被拒；design 建立後產生 `ref_audio_path`；刪除 Preset 被拒；超過 `max_file_size` 的上傳回 413；context 超出 token 預算回 413 或 400；夾帶路徑穿越字元的檔名或音色名不影響儲存路徑（落地檔名為 UUID）；非音訊或偽造副檔名的檔案（magic number 不符）被拒；design 建立時若模型呼叫失敗，DB 不留殘缺列且暫存檔被清除；跨來源（非前端 Origin）的狀態變更請求被 CORS 或 Origin 檢查拒絕；BFF 啟動後過期暫存檔被清理；超過上限的 Hotword 匯入被拒（413 或 400）；含特殊 token 或控制字元的 Hotword 被過濾或跳脫而不破壞辨識輸出解析；刪除音色後不影響進行中的合成，且不殘留未追蹤的實體檔。
+- 需測試的模組：BFF 的路由與編排邏輯、Hotword context 編譯器、音檔轉檔器（以小型樣本檔）、合成請求的組裝（Instruction 進入文字、`ref_text` 不進入）。
+- 前端主要共用同一組 HTTP API 契約做測試。User Story 30 的模式揭露是純前端呈現、無對應 API 行為，故對它保留一個最低限度的元件測試為必要項，而非選配。
+- 先驗證條件（每個 User Story 對應一條可檢查的 API 行為）：辨識回傳含 Segment 與純文字；停用的 Hotword 不進 context；clone 音色送 Instruction 被接受且該 Instruction 進入送給模型的文字；任一音色的合成請求都不含 `ref_text`；design 建立後產生 `ref_audio_path`；超過 `max_file_size` 的上傳回 413；context 超出 token 預算回 413 或 400；夾帶路徑穿越字元的檔名或音色名不影響儲存路徑（落地檔名為 UUID）；非音訊或偽造副檔名的檔案（magic number 不符）被拒；design 建立時若模型呼叫失敗，DB 不留殘缺列且暫存檔被清除；跨來源（非前端 Origin）的狀態變更請求被 CORS 或 Origin 檢查拒絕；BFF 啟動後過期暫存檔被清理；超過上限的 Hotword 匯入被拒（413 或 400）；含特殊 token 或控制字元的 Hotword 被過濾或跳脫而不破壞辨識輸出解析；刪除音色後不影響進行中的合成，且不殘留未追蹤的實體檔。
 - Prior art：本 repo 為全新專案，尚無既有測試可參照；此 seam 策略即為後續測試的範本。
 
 ## Out of Scope
@@ -188,16 +190,15 @@ Vibe-Vox 是一個 ASR/TTS 後端服務，同時服務兩類消費者。**消費
 - 針對超長音檔的非同步 job 佇列與進度回報。初版採同步處理，並以「單檔大小上限、請求逾時、併發上限、串流落地」作為同步模式下的資源護欄（見 Implementation Decisions 的安全與資源邊界）。
 - 多使用者帳號、認證與權限控管。初版為內部單一操作情境。
 - 模型微調（fine-tune）與訓練。
-- VibeVoice 的 TTS 能力（原廠已於 2025 年 9 月移除）與非 Qwen 的 TTS 引擎。
+- VibeVoice 的 TTS 能力（原廠已於 2025 年 9 月移除），以及 VoxCPM2 以外的 TTS 引擎。
 - 行動版 App 與桌面原生封裝。
 - 介面語系擴充（初版僅台灣繁體中文）。
 
 ## Further Notes
 
-- 建置前需做一次 spike，確認 TTS 服務層採用哪一種實作最穩定且完整支援 clone／design／instruct 三者：自寫薄的原生 `qwen-tts` 服務、vLLM-Omni、或經審視的社群 OpenAI 相容 wrapper。本 spec 傾向自寫原生服務以確保三種機制可控。
+- TTS 文字前處理層：任意台灣繁中送進 VoxCPM2 前需經 `raw 繁中 → 淨化 {} → TN → OpenCC s2tw → G2P（只鎖台陸差異字，輸出 {pinyin+聲調}）→ VoxCPM2(normalize=False)`，**順序不可倒置**——TN 會把 `{ni3}` 展開成 `{ni三}`，標記全毀。TN 用 `wetext`（Apache-2.0，已在 VoxCPM2 相依樹）加台灣規則補丁，G2P 用 `g2pw` 的發行模型（台灣注音）。該層放在 `TtsClient` 之上：純函式、無 I/O，放進 adapter 會使其無法在不接模型的情況下單測。細節見 `docs/superpowers/specs/2026-08-05-tts-text-frontend-tn-g2p.md`。
 - 本地無 GPU 開發模式：測試用的 `AsrClient`／`TtsClient` stub 應同時可用於本地開發。提供 `docker-compose.dev.yml`（或等效設定）在無 48GB GPU 的工作機上以 stub adapter 啟動前端與 BFF，讓日常 UI／BFF 開發脫離高階 GPU 環境，降低 onboarding 摩擦。
-- 消費端遷移：Vibe-Vox 取代 AI_practise 現行 :8088（VibeVoice-ASR + CosyVoice）。TTS 契約 `/api/tts/speech` 形狀不變，主要為端點重指與 Qwen 的 instruct 對應；ASR 由 WebSocket 改 REST，需在 AI_practise 新增 REST 版 AsrProvider（現有 provider 可插拔設計支援）。兩 repo 皆由 Claude 協同開發，可一併處理。詳見 ADR-0003。
+- 消費端遷移：Vibe-Vox 取代 AI_practise 現行 :8088（VibeVoice-ASR + CosyVoice）。`/api/tts/speech` 形狀不變，`/api/tts/voices` 的回應形狀改變，AI_practise 需一併調整；ASR 由 WebSocket 改 REST，需新增 REST 版 AsrProvider（現有 provider 可插拔設計支援）。兩 repo 皆由 Claude 協同開發，可一併處理。詳見 ADR-0003。
 - Instruction 範例需策展一份清單（涵蓋語氣、情緒、韻律、角色設定），對應 User Story 31。
 - Hotword context 與音訊共用 64K token 預算，UI 的 token 估算是防止準確度反被稀釋的重要防線。
-- 原廠資源與連結（模型權重 HF id、vLLM 服務文件、transformers ASR 文件、Qwen3-TTS 套件與 demo）已在對話中彙整，實作時作為連線方式與選項的依據；需求 4 的「原廠資源連結與選項」以此為準。
-- 發佈到 issue tracker 的步驟因本 repo 尚未執行 setup-matt-pocock-skills 而略過；本 spec 以 `docs/spec.md` 版控留存。後續可用 to-tickets 將本 spec 拆成實作票。
+- 原廠資源與連結（模型權重 HF id、vLLM 與 vLLM-Omni 服務文件、transformers ASR 文件、VoxCPM2 模型卡與 readthedocs）見 `docs/superpowers/specs/` 的兩份 2026-08-05 findings，其中逐條標明 primary 與 community。

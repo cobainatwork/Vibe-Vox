@@ -1,6 +1,6 @@
 # Vibe-Vox
 
-自架的 ASR/TTS 測試與管理平台。ASR 由 VibeVoice-ASR 提供、TTS 由 Qwen3-TTS 提供，前端為單一統一操作頁，涵蓋 Hotwords 管理、ASR 測試、TTS 測試與音色管理。
+自架的 ASR/TTS 測試與管理平台。ASR 由 VibeVoice-ASR 提供、TTS 由 VoxCPM2 提供，前端為單一統一操作頁，涵蓋 Hotwords 管理、ASR 測試、TTS 測試與音色管理。
 
 ## Language
 
@@ -11,7 +11,7 @@
 _Avoid_: STT、語音辨識引擎（泛稱時）
 
 **TTS**：
-文字轉語音。本專案一律指 Qwen3-TTS。
+文字轉語音。本專案一律指 VoxCPM2。
 _Avoid_: 語音合成引擎（泛稱時）
 
 ### ASR 領域
@@ -47,15 +47,11 @@ _Avoid_: 對齊失敗旗標（僅描述其中一種值）
 ### TTS 音色領域
 
 **Voice（音色）**：
-一個可被 TTS 選用的發聲身分。分三型：Preset speaker、Voice clone、Voice design。是「可選音色」下拉選單的統一概念。
+一個可被 TTS 選用的發聲身分。分兩型：Voice clone、Voice design。是「可選音色」下拉選單的統一概念。每個 Voice 都由人建立，系統不附任何音色。
 _Avoid_: speaker（泛稱時）、聲線、tone
 
-**Preset speaker**：
-Qwen3-TTS 內建的 9 個唯讀語者。可搭配 Instruction。
-_Avoid_: 內建聲音、預設 voice（易與「預設值」混淆）
-
 **Voice clone**：
-使用者上傳參考音檔加逐字稿建立的音色。不支援 Instruction。
+上傳參考音檔建立的音色。
 _Avoid_: 複製聲音、仿聲
 
 **Voice design**：
@@ -63,7 +59,7 @@ _Avoid_: 複製聲音、仿聲
 _Avoid_: 設計聲音、生成音色
 
 **Instruction**：
-控制語氣、情緒、韻律的自然語言指示，對應模型的 `instruct` 參數。僅 Preset speaker 與 Voice design 生效，Voice clone 無效。
+控制語氣、情緒、韻律的自然語言指示。兩型 Voice 皆生效。
 _Avoid_: prompt（此詞在 ASR 已另有所指）、風格描述
 
 **定版（Pinning）**：
@@ -73,7 +69,7 @@ _Avoid_: 快照、固定
 ### 系統
 
 **能力感知（Capability-aware）**：
-UI 依所選 Voice 型別動態啟用或停用 Instruction 欄位，誠實反映模型能力邊界的設計原則。
+介面只提供模型實際具備的能力，不讓使用者對不存在的能力下指令的設計原則。
 _Avoid_: 智慧切換、動態表單
 
 **BFF**：

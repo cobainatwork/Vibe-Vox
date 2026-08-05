@@ -1,8 +1,8 @@
 # Vibe-Vox 交接文件
 
-**日期**：2026-08-04
+**日期**：2026-08-05
 **分支**：main（工作樹乾淨，本 session 全部已 merge 並 push）
-**範圍**：字級強制對齊 T2–T4 落地（#27 #28 #29）、Hotword 持久化（#33）、對齊判準過嚴（#34）、逾時鏈路（#35）、會議錄音揭露的三個缺陷（#36 #37 #38）
+**範圍**：字級強制對齊 T2–T4 落地（#27 #28 #29）、Hotword 持久化（#33）、對齊判準過嚴（#34）、逾時鏈路（#35）、會議錄音揭露的三個缺陷（#36 #37 #38）、真機驗收與兩組校準推翻（#32 #36）、vLLM 記憶體參數顯式化（#31）
 
 ---
 
@@ -292,9 +292,9 @@ DB 與暫存目錄刻意分開：暫存音檔單檔上限 200 MB、用畢即刪�
 
 ## 4. 下一步
 
-**4.1 是唯一有時效的一件事：把 #36 的修正部署上去，用那份會議錄音重跑。** 程式已在 main，驗收未實跑。4.2 是最大的未動工項目。
+**4.1 已在真機驗收完畢**，過程中實測推翻了兩組校準（見 2.2、2.3），留在這裡是因為那三個根因各自推翻了一個先前的判斷。**4.2 是最大的未動工項目。**
 
-### 4.1 #36 #37 #38：會議錄音揭露的三個缺陷（已修，待實跑驗收）
+### 4.1 #36 #37 #38：會議錄音揭露的三個缺陷（已修並已真機驗收）
 
 由使用者實測 10 分鐘、五語者的會議錄音發現，三張票都動 `bff/src/vibe_vox/adapters/aligner.py`，已一輪做完並 merge 進 main（`c77ae1b`）。
 
@@ -346,13 +346,27 @@ bff-1     | 對齊服務不可用，全段降級為未對齊：AlignerUnavailabl
 
 ### 4.2 TTS 引擎變更（#13 map + #14–#20）
 
-**這是最大的未動工項目。** 七張子票（#14–#20）加下游的 #6–#8，共十張，全未動。
+**2026-08-05 已解三張：#14、#15（research，皆已關閉）、#16（決策）。** 剩 #17 #18 #19 #20 四張決策票，加下游的 #6–#8。
 
-**repo 與決策不一致還擺著**：VoxCPM2 取代 Qwen3-TTS 已定案，但 `CONTEXT.md`、`docs/spec.md`、ADR-0001 三份文件至今仍寫 Qwen3-TTS。任何人現在讀 repo 都會拿到錯的選型。
+**#13 那張 map 不需要 re-scope。** 它的 Notes 第一行即「TTS 引擎已於 map #9 定案由 Qwen3-TTS 改 VoxCPM2」，並記著兩道 spike（#11 #12）皆 PASS 與 charting 時 grill 定的骨架（Preset speaker 重定義為系統預建的唯讀 Voice）。**T1–T7 是知道 VoxCPM2 之後才畫的**。決策 index 在該 map 的 `Decisions so far`，**手動維護**——因為 `/wayfinder` 沒裝在目前的 plugin 版本（mattpocock-skills 1.2.0 只出 diagnosing-bugs、tdd、prototype、research、domain-modeling、codebase-design、code-review、resolving-merge-conflicts、grilling）。research 票直接走 `/research`、決策票走 `/grilling` 與 `/domain-modeling`。
 
-依相依關係，接這條線同時解掉三件事：文件不一致、#6–#8 的封鎖、以及 #31 的前置（#31 第一步是實測 VoxCPM2 的實際佔用，那正是 #14 的產出）。
+**已定的三件事**（完整記錄見 #13 的 index 與兩份 findings）：
 
-**開工方式**：`#14`（VoxCPM2 服務化與傳輸端點契約）與 `#15`（TW 破音字→拼音資源與 G2P 策略盤點）是兩張 research 票，可平行。另一條路是先重新盤 #13 那張 map 的範圍：它的子票是在 VoxCPM2 定案前寫的，可能需要 re-scope（#13 由 wayfinder 流程產生，若該 skill 仍可用即可沿用同一流程）。
+1. **傳輸採 vLLM-Omni 的 `/v1/audio/speech`**（#14）。最咬人的發現是 `instructions` 欄位對 VoxCPM2 **從未被讀取且不報錯**——帶了會回 200 加一段沒有情緒的音訊。風格的唯一通道是把 `(...)` 寫進 `input`。
+2. **TTS 文字前處理層走開源路徑，放棄 ttsfrd**（#15，使用者裁決）。詳見下方。
+3. **合成一律固定 Controllable 模式，不暴露模式選擇**（#16，使用者裁決）。兩型音色因此一律吃 Instruction，能力感知的「停用欄位」規則整條消失。`ref_text` 降為管理用 metadata，**不得進入合成路徑**——送了會讓 Instruction 靜默失效。
+
+**「系統預建 Voice」這個型別已被推翻，不要再用。** charting 時定的骨架是「Preset speaker 重定義為系統預建的唯讀 Voice」，但 VoxCPM2 沒有任何內建語者，所謂預建音色就是我方自己建的 clone 或 design——那是「誰建的」而非一種音色。Voice 現為兩型（clone、design），`type` 去掉 `'preset'`，User Story 44（唯讀音色保護）已刪除並重新編號。
+
+**ttsfrd 是使用者指定的需求，但查證後判定為 blocker。** 使用者原話稱它為 Text Normalization Frontend；該展開未見於官方 artifact（wheel 的 METADATA 只寫 `tts frd engine for python module`）。兩個獨立成立的否決理由：**無任何授權可依循**（wheel METADATA 無 License 欄、ModelScope 授權欄位皆空字串、repo 無 LICENSE，且 `resource.zip` 內含明文禁商用的 Festival OALD 語料），以及 **`.so` 內沒有 ZhTW locale**（中文系只有 ZhCN／ZhHK／ZhSC／ZhSH，其中文路徑就是 zh-CN，即使取得授權對台灣仍是錯的工具）。兩項皆由本 session 獨立複驗。改走的開源路徑零額外授權面：VoxCPM2 內建正規化器本身就是 `wetext`（Apache-2.0，已在相依樹）。
+
+**文件不一致已全部解除**：`CONTEXT.md`、`docs/spec.md`、`CLAUDE.md`、`docker-compose.yml`、ADR-0003 的 Qwen3-TTS 敘述全部改為 VoxCPM2；ADR-0001 標 `superseded`，不改內文，取代它的新 ADR 是 #19。全 repo 已無殘留（`.remember/` 的歷史紀錄除外）。
+
+**消費端 TTS 契約已寫出**：`docs/api/tts.md`，供 AI_practise 撰寫 provider。它是**待實作的契約**，與 `asr.md`（已實作行為）性質不同，BFF 目前沒有任何 `/api/tts/*` 端點。`GET /api/tts/voices` 的回應形狀由 `{preset_voices, custom_voices}` 改為 `{voices:[{id,name,type,language}]}`，這對 AI_practise 是破壞性變更。
+
+**#6–#8 已 re-scope**：三張都留了逐條的不成立項並**移除 `ready-for-agent` 標籤**（它們的規格與新決策衝突，照做會實作出錯的行為，#7 的能力規則是被反轉而非只是過期）。
+
+**#31 的前置未解**：`HANDOFF.md` §8.2 原本把「實測 VoxCPM2 佔用」歸給 #14，那是誤植（#14 是 research／AFK 票，且 #13 的 Out of scope 排除實作）。它屬 #31，可執行的量測程序與起始參數值已寫進該票留言。
 
 **既有資產**：spike harness 在分支 `spike/voxcpm-tts`（Docker、`optimize=False`、`{pinyin}` 鎖台灣破音字）。四份引擎評估在 `docs/superpowers/specs/`。
 
@@ -569,7 +583,9 @@ aligner 不可用時 ASR 逐字稿仍須照常回傳（ADR-0004 的第二層降�
 2. **aligner 的佔用會長。** idle 時 2186、處理過請求後 3620，PyTorch 的 caching allocator 不還回去（見 2.2），穩態上限未知。要降只能 `docker compose restart aligner`。
 3. **GPU 0 的總量本身有兩個值**：`nvidia-smi` 記 46068、torch 報 45465（2.2 的表以後者為實際）。兩者差 603 MiB，而這個差已經大於任何算得出來的餘裕，所以精確到百 MiB 的餘裕計算是假精度。
 
-**要答案就實作再量，不要繼續推算。** 順序：#14 把 VoxCPM2 服務化並量它的實際佔用 → 同時量 aligner 在 batch 8 之下跑完長音檔的穩態佔用 → 三個數字擺在一起才知道夠不夠。**若不夠，剩下的槓桿依代價由小到大**：再降 utilization（下限由「KV cache 須裝得下一條 `max-model-len` 序列」決定，每 token 約 56 KiB）、降 `max-model-len`（會使長音檔改為立刻回 400 而非等到逾時，須同步 `docs/api/asr.md` §3.3 與 `frontend/src/asr.ts`）、`kv-cache-dtype fp8`（動數值精度，**必須做逐字稿的逐字元 diff**）。
+**要答案就實作再量，不要繼續推算。** 順序：把 VoxCPM2 服務化並量它的實際佔用 → 同時量 aligner 在 batch 8 之下跑完長音檔的穩態佔用 → 三個數字擺在一起才知道夠不夠。
+
+**這件事屬 #31，不屬 #14**（本節原本寫「#14 把 VoxCPM2 服務化並量」，那是誤植）：#14 是 research／AFK 票，而 #13 的 Out of scope 明訂該 map 只到決策與文件層。#14 已完成的是傳輸選型，它替本項留下了可執行的量測程序與起始參數值，已寫進 #31 的留言。**官方的三個記憶體數字沒有一個能拿來規劃本機容量**（模型卡約 8 GB、recipe 約 22 GiB、現行 deploy yaml 自述 peak 約 13 GiB，recipe 那組對應較舊的 yaml 已過期），這是不要再算的第四個理由。
 
 **若量完發現仍不夠，剩下的槓桿依代價由小到大**：再降 utilization（下限由「KV cache 須裝得下一條 `max-model-len` 序列」決定，每 token 約 56 KiB）、降 `max-model-len`（會使長音檔改為立刻回 400 而非等到逾時，須同步 `docs/api/asr.md` §3.3 與 `frontend/src/asr.ts`）、`kv-cache-dtype fp8`（動數值精度，**必須做逐字稿的逐字元 diff**，不能只確認服務起得來）。
 

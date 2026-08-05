@@ -90,10 +90,10 @@ services:
     deploy: *gpu_deploy
 
   tts:
-    # Qwen3-TTS 獨立服務程序（映像與實作待 spike 定案）。
+    # vLLM-Omni 承載 VoxCPM2（`vllm serve openbmb/VoxCPM2 --omni`）。
     # 尚未實作：置於 tts profile，預設不啟動；ASR 測試不需它（bff 的 tts_client 為 stub）。
     profiles: ["tts"]
-    image: ${VIBE_VOX_TTS_IMAGE:-PLACEHOLDER_QWEN3_TTS_IMAGE}
+    image: ${VIBE_VOX_TTS_IMAGE:-PLACEHOLDER_VLLM_OMNI_IMAGE}
     networks:
       - vibe
     restart: unless-stopped
