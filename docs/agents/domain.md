@@ -11,14 +11,20 @@ How the engineering skills should consume this repo's domain documentation when 
 
 ## File structure（single-context）
 
+原始碼分散在三個部署單元的目錄下，領域文件則集中於根層——這是刻意的：`CONTEXT.md` 的詞彙跨 BFF、前端與 aligner 共用，拆開會讓同一個概念有三份定義。
+
 ```
 /
-├── CONTEXT.md
+├── CONTEXT.md              # 領域詞彙表
 ├── docs/adr/
-│   ├── 0001-decoupled-model-serving.md
+│   ├── 0001-decoupled-model-serving.md      # superseded，取代者為 #19
 │   ├── 0002-design-voice-pinned-on-create.md
-│   └── 0003-rest-consumer-contract.md
-└── src/
+│   ├── 0003-rest-consumer-contract.md
+│   └── 0004-word-level-forced-alignment.md
+├── docs/api/               # 消費端契約（asr.md 已實作、tts.md 逐項標示）
+├── bff/src/vibe_vox/       # FastAPI BFF
+├── frontend/src/           # React 管理平面
+└── aligner/                # 字級強制對齊服務
 ```
 
 ## Use the glossary's vocabulary
