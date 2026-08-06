@@ -5,10 +5,11 @@
 且每段一個子進程會付上逾時處理與檔案落地的代價。全程於記憶體完成，不落暫存檔。
 """
 
-import io
 import wave
 from dataclasses import dataclass
 from pathlib import Path
+
+from vibe_vox.audio.wav import PcmAudio, PcmSpec, wrap_pcm
 
 
 @dataclass(frozen=True)
@@ -50,14 +51,17 @@ def slice_wav(src: Path, *, start: float, end: float) -> Slice:
         reader.setpos(first_frame)
         frames = reader.readframes(int(end * rate) - first_frame)
 
-    buffer = io.BytesIO()
-    with wave.open(buffer, "wb") as writer:
-        writer.setnchannels(params.nchannels)
-        writer.setsampwidth(params.sampwidth)
-        writer.setframerate(rate)
-        writer.writeframes(frames)
     return Slice(
-        wav=buffer.getvalue(),
+        wav=wrap_pcm(
+            PcmAudio(
+                frames,
+                PcmSpec(
+                    sample_rate=rate,
+                    channels=params.nchannels,
+                    sample_width=params.sampwidth,
+                ),
+            )
+        ),
         start=first_frame / rate,
         frames=len(frames) // (params.nchannels * params.sampwidth),
     )

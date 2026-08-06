@@ -16,12 +16,24 @@ from vibe_vox.adapters.stub import (
     StubTtsClient,
 )
 from vibe_vox.adapters.vllm_asr import AsrTimeout, AsrUnavailable, VllmAsrClient
+from vibe_vox.adapters.vllm_omni_tts import (
+    TtsTimeout,
+    TtsUnavailable,
+    VllmOmniTtsClient,
+)
 from vibe_vox.api.admin_hotwords import router as admin_hotwords_router
 from vibe_vox.api.admin_voices import InvalidVoiceName, router as admin_voices_router
 from vibe_vox.api.asr import InvalidExtraTerms, router as asr_router
 from vibe_vox.api.health import router as health_router
 from vibe_vox.api.hotwords import router as hotwords_router
-from vibe_vox.api.tts import router as tts_router
+from vibe_vox.api.tts import (
+    EmptyInput,
+    InputTooLong,
+    StreamUnsupported,
+    UnsupportedModel,
+    UnsupportedResponseFormat,
+    router as tts_router,
+)
 from vibe_vox.audio.errors import (
     FileTooLarge,
     TranscodeError,
@@ -62,6 +74,18 @@ def _default_aligner_client(settings: Settings) -> AlignerClient:
     )
 
 
+def _default_tts_client(settings: Settings) -> TtsClient:
+    """dev（無 GPU）用 stub 回靜音；否則接遠端 vLLM-Omni。"""
+    if settings.use_stub_models:
+        return StubTtsClient()
+    return VllmOmniTtsClient(
+        settings.tts_base_url,
+        settings.tts_served_name,
+        timeout=settings.tts_timeout_seconds,
+        ffmpeg_timeout_seconds=settings.ffmpeg_timeout_seconds,
+    )
+
+
 def create_app(
     asr_client: AsrClient | None = None,
     tts_client: TtsClient | None = None,
@@ -82,7 +106,7 @@ def create_app(
     app.state.settings = settings
     app.state.asr_client = asr_client or _default_asr_client(settings)
     app.state.aligner_client = aligner_client or _default_aligner_client(settings)
-    app.state.tts_client = tts_client or StubTtsClient()
+    app.state.tts_client = tts_client or _default_tts_client(settings)
     app.state.audio_intake = audio_intake or AudioIntake(
         temp_dir=settings.temp_dir,
         max_bytes=settings.audio_max_bytes,
@@ -192,6 +216,19 @@ def create_app(
 
     app.add_exception_handler(InvalidVoiceName, _on_invalid_voice_name)
 
+    async def _on_input_too_long(request, exc: InputTooLong) -> JSONResponse:
+        return JSONResponse(
+            status_code=413,
+            content={
+                "error": {
+                    "code": "INPUT_TOO_LONG",
+                    "message": f"要合成的文字 {exc.length} 字超過上限 {exc.limit} 字，請切成多次請求。",
+                }
+            },
+        )
+
+    app.add_exception_handler(InputTooLong, _on_input_too_long)
+
     async def _on_validation_error(request, exc: RequestValidationError) -> JSONResponse:
         # spec：格式或欄位驗證失敗回 400，並統一為 {error:{code,message}} 信封。
         return JSONResponse(
@@ -236,6 +273,40 @@ def create_app(
     app.add_exception_handler(
         AsrUnavailable,
         _error_handler(502, "ASR_UNAVAILABLE", "語音辨識服務暫時無法使用。"),
+    )
+    app.add_exception_handler(
+        EmptyInput, _error_handler(400, "EMPTY_INPUT", "要合成的文字不可為空。")
+    )
+    app.add_exception_handler(
+        UnsupportedModel,
+        _error_handler(
+            400,
+            "UNSUPPORTED_MODEL",
+            "指定的模型不在可用清單中，請改用 GET /api/tts/models 回報的值。",
+        ),
+    )
+    app.add_exception_handler(
+        StreamUnsupported,
+        _error_handler(
+            400,
+            "STREAM_UNSUPPORTED",
+            "分塊串流尚未實作，請以 stream=false 取得完整音訊。",
+        ),
+    )
+    app.add_exception_handler(
+        UnsupportedResponseFormat,
+        _error_handler(
+            400,
+            "UNSUPPORTED_RESPONSE_FORMAT",
+            "不支援的輸出格式，目前可用 wav 與 pcm。",
+        ),
+    )
+    app.add_exception_handler(
+        TtsTimeout, _error_handler(504, "TTS_TIMEOUT", "語音合成服務回應逾時。")
+    )
+    app.add_exception_handler(
+        TtsUnavailable,
+        _error_handler(502, "TTS_UNAVAILABLE", "語音合成服務暫時無法使用。"),
     )
 
     app.add_middleware(OriginGuardMiddleware, allowed_origins=settings.allowed_origins)

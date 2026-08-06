@@ -17,7 +17,7 @@ Vibe-Vox 對消費者 AI_practise（智能陪練平台）提供 REST 契約：AS
 
 - 破壞現行消費端：AI_practise 需新增 REST 版 `AsrProvider`。其 `IAsrProvider` 為可插拔設計（設定切換、`IAsyncEnumerable` 語義可包單一 final 結果），成本低且局部。
 - TTS 的 `/api/tts/speech` 契約形狀不變，主要為端點重指；`ITtsProvider` 已支援分塊串流。
-- TTS 串流回應納入範圍（第一音塊就緒即播，降低對話感知延遲）。
+- TTS 串流回應納入範圍（第一音塊就緒即播，降低對話感知延遲）。**實作狀態（#6，2026-08-06）：尚未實作**，`POST /api/tts/speech` 帶 `stream: true` 回 400 `STREAM_UNSUPPORTED`。本決策未撤回——串流仍在範圍內，只是還沒到位。回一個明確的 400 而非靜默退回非串流，是為了不讓依 `docs/api/tts.md` §5.4 實作 chunk 閒置逾時的 provider 把正常的回合判成失敗。首音延遲的目標值待 #17。
 - 若未來需要邊講邊出的即時 partial ASR（live caption／barge-in），須改用真正的串流 ASR 模型並重新評估傳輸層。
 - 消費端形狀為約束性：Hotwords 對消費端維持 `{id, word}`；TTS wav 輸出須 24kHz／mono／16-bit 以供消費端剝頭成 PCM。
 - **ASR 回應於 #28 擴充字級對齊欄位**（ADR-0004 的連動項，向後相容——既有欄位形狀與值不變）：`segments[]` 加 `aligned: bool` 與 `words: [{Text, Start, End}]`，根層加 `alignment: {audio_duration, speech_start, speech_end, aligned_duration}`。完整形狀見 `docs/api/asr.md` §4.4。

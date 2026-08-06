@@ -1,7 +1,8 @@
 # Vibe-Vox 正式版編排：五部署單元，vLLM、aligner 與 TTS 共用單張 GPU
 # （ADR-0004：三模型常駐 RTX 6000 Ada 48GB）。
-# 注意：vllm 與 tts 的映像、模型 id 與服務層實作待 spec Further Notes 所述 spike
-# 定案（見 #2/#4）；此處以合理預設宣告部署拓撲，adapter 對接於對應票交付。
+#
+# 注意：**三個模型同時啟動從未實測**。ADR 的 VRAM 帳有兩項已知錯誤（實際是兩張卡、
+# 第二張被別的專案動態佔用；VoxCPM2 的 ~8 GiB 是估算非實測），校準歸 #31。
 
 services:
   bff:
@@ -11,7 +12,8 @@ services:
       VIBE_VOX_FRONTEND_ORIGINS: "http://localhost"
       VIBE_VOX_ASR_BASE_URL: "http://vllm:8000"
       VIBE_VOX_ALIGNER_BASE_URL: "http://aligner:9100"
-      VIBE_VOX_TTS_BASE_URL: "http://tts:9000"
+      # 埠須與 tts 服務 command 的 --port 一致（vLLM serve 預設 8000）。
+      VIBE_VOX_TTS_BASE_URL: "http://tts:8000"
       # **同一個表示式必須寫在 bff 與 aligner 兩處**，由 .env 單點覆寫，兩邊才不會分歧
       # （分歧的症狀見 bff/src/vibe_vox/adapters/aligner.py 的 DEFAULT_MAX_BATCH_ITEMS）。
       # bff/tests/test_config.py 會讀本檔確認兩處都佈線且值相同。
@@ -91,10 +93,34 @@ services:
     deploy: *gpu_deploy
 
   tts:
-    # vLLM-Omni 承載 VoxCPM2（`vllm serve openbmb/VoxCPM2 --omni`）。
-    # 尚未實作：置於 tts profile，預設不啟動；ASR 測試不需它（bff 的 tts_client 為 stub）。
+    # vLLM-Omni 承載 VoxCPM2。見 docker/tts.Dockerfile。
+    # 仍置於 tts profile、預設不啟動：三個模型能否同時放進 GPU 0 尚未實測（#31），
+    # 而 ASR 測試不需要它（bff 在 VIBE_VOX_USE_STUB_MODELS=true 下走 stub）。
     profiles: ["tts"]
-    image: ${VIBE_VOX_TTS_IMAGE:-PLACEHOLDER_VLLM_OMNI_IMAGE}
+    build:
+      context: .
+      dockerfile: docker/tts.Dockerfile
+    # **記憶體參數顯式列出**，理由同 vllm 服務。但兩者的機制不同：utilization 是
+    # per-instance 上限而非全卡瓜分（傳輸 findings §3.1.6），真正的約束是「啟動當下的
+    # free memory ≥ total × 自己的 utilization」，不夠就在啟動期明確拒絕。
+    #
+    # **這兩個值未經實測**，是能啟動的保守起點而非校準結果：VoxCPM2 的實際佔用要等
+    # #31 量出來。上游 voxcpm2.yaml 的預設（utilization 0.9、KV 6 GiB）在本機一定起不來，
+    # 因為 ASR 的 vLLM 已佔住大半張卡。
+    command:
+      - vllm
+      - serve
+      - openbmb/VoxCPM2
+      - --omni
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --gpu-memory-utilization
+      - "${VIBE_VOX_TTS_GPU_MEMORY_UTILIZATION:-0.17}"
+      - --kv-cache-memory-bytes
+      - "${VIBE_VOX_TTS_KV_CACHE_BYTES:-1073741824}"
+    ipc: host   # 同 vllm 服務
     networks:
       - vibe
     restart: unless-stopped

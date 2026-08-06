@@ -125,6 +125,28 @@ class Settings:
     aligner_slice_buffer_seconds: float = field(
         default_factory=_env("VIBE_VOX_ALIGNER_SLICE_BUFFER_SECONDS", "0.5", float)
     )
+    # 遠端語音合成服務（vLLM-Omni）位址；預設對齊 compose 的 tts 服務。
+    tts_base_url: str = field(
+        default_factory=_env("VIBE_VOX_TTS_BASE_URL", "http://tts:8000", str)
+    )
+    # vLLM-Omni 的 --served-model-name；合成請求的 model 參數用它。
+    tts_served_name: str = field(
+        default_factory=_env("VIBE_VOX_TTS_SERVED_NAME", "voxcpm2", str)
+    )
+    # 呼叫遠端 TTS 的逾時（秒）。**尚未以實測校準**：延遲 bar 是 #17，服務跑起來
+    # 才量得到。此值為覆蓋冷啟的保守估計——recipe 記載 server 冷啟後首個請求約 25 秒
+    # （compile／graph capture），穩態 RTF ~0.12，故一句話的穩態成本遠低於此。
+    tts_timeout_seconds: float = field(
+        default_factory=_env("VIBE_VOX_TTS_TIMEOUT_SECONDS", "120", float)
+    )
+    # 單次合成的文字長度上限（字元），超過回 413。
+    #
+    # 消費端是逐句合成（一次請求一種語氣，見 docs/api/tts.md §5.2），故實際請求遠低於
+    # 此值；上限擋的是整篇文章被灌進來而長時間佔住 GPU。**不是從模型上限推導的**：
+    # VoxCPM2 的 max_model_len 為 4096 token，而中文的字元對 token 比例未量測。
+    tts_max_input_chars: int = field(
+        default_factory=_env("VIBE_VOX_TTS_MAX_INPUT_CHARS", "2000", int)
+    )
     # 無 GPU 環境（dev）以 stub adapter 回假結果啟動，不連真實模型服務。
     use_stub_models: bool = field(
         default_factory=_env(
@@ -159,4 +181,15 @@ class Settings:
             self.asr_timeout_seconds
             + self.ffmpeg_timeout_seconds
             + self.aligner_timeout_seconds
+        ) * HEAVY_GUARD_MARGIN
+
+    def tts_request_budget(self) -> float:
+        """合成端點的總體逾時預算（合成 + 降採樣的轉碼）。
+
+        與 heavy_request_budget 分開算：TTS 不經 ASR 與對齊，用同一個預算會讓 guard
+        遠晚於 tts_timeout 才觸發，掛住的請求白佔一個併發額度。同樣留餘裕讓內層的
+        TtsTimeout 先觸發（→ 504 TTS_TIMEOUT），guard 只當 backstop。
+        """
+        return (
+            self.tts_timeout_seconds + self.ffmpeg_timeout_seconds
         ) * HEAVY_GUARD_MARGIN

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
+import { synthesizeSpeech } from "./tts";
+import { useObjectUrl } from "./useObjectUrl";
 import {
   createCloneVoice,
   deleteVoice,
@@ -13,6 +15,12 @@ const TYPE_LABEL: Record<Voice["type"], string> = {
   design: "Design",
 };
 
+// 試聽用的固定句子：有稱謂與常見商務用語，聽得出音色與語氣，長度也夠短不佔 GPU。
+// 刻意不含數字——數字唸法要等 TN 前處理層做出來才正確（見 docs/api/tts.md §5.1），
+// 現在放數字只會讓操作者聽到錯的唸法而以為是音色壞了。
+// 不帶 Instruction——試聽要聽的是音色本身。
+const PREVIEW_TEXT = "您好，我是您的專屬顧問，很高興為您服務。";
+
 export function VoicesPanel() {
   const [voices, setVoices] = useState<Voice[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -24,6 +32,9 @@ export function VoicesPanel() {
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameTo, setRenameTo] = useState("");
+
+  const [previewOf, setPreviewOf] = useState<string | null>(null);
+  const [previewUrl, showPreview] = useObjectUrl();
 
   const load = useCallback(async () => {
     try {
@@ -58,6 +69,20 @@ export function VoicesPanel() {
       setRefAudio(null);
     });
   };
+
+  // 不走 run()：那個會在成功後重抓清單，而試聽不改動任何資料。
+  const preview = (v: Voice) =>
+    void (async () => {
+      try {
+        // 走消費端的合成端點而非另開一條試聽路徑：這裡聽到的必須就是 AI_practise 會
+        // 拿到的東西，否則試聽正常而消費端壞掉時沒有人會發現。
+        showPreview(await synthesizeSpeech({ input: PREVIEW_TEXT, voice: v.id }));
+        setPreviewOf(v.id);
+        setError(null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "試聽失敗");
+      }
+    })();
 
   const saveRename = () =>
     void run(async () => {
@@ -176,6 +201,13 @@ export function VoicesPanel() {
                       <button
                         className="hw-link"
                         type="button"
+                        onClick={() => void preview(v)}
+                      >
+                        試聽
+                      </button>
+                      <button
+                        className="hw-link"
+                        type="button"
                         onClick={() => {
                           setRenamingId(v.id);
                           setRenameTo(v.name);
@@ -191,6 +223,10 @@ export function VoicesPanel() {
                         刪除
                       </button>
                     </>
+                  )}
+                  {/* 播放器留在該列，不集中到頁尾：操作者要知道聽到的是哪一個音色。 */}
+                  {previewOf === v.id && previewUrl && (
+                    <audio aria-label={`試聽 ${v.name}`} controls autoPlay src={previewUrl} />
                   )}
                 </td>
               </tr>

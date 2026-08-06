@@ -1,8 +1,10 @@
 # TTS API 規格：`/api/tts/*`
 
-消費端資料平面的語音合成端點。送一段文字與一個音色、拿一段音訊；支援分塊串流以降低首音延遲。
+消費端資料平面的語音合成端點。送一段文字與一個音色、拿一段音訊。
 
-**本文所述端點尚未實作。** 這是供 AI_practise 撰寫 provider 的契約規格，實作與本文同步。已實作的只有 `GET /api/health`（含 TTS 就緒狀態）。ASR 端點見 `asr.md`，其所述為已實作行為。
+**本文逐項標示實作狀態。** 未標註者為已實作並經測試涵蓋；標「尚未實作」者是契約已定但程式碼還沒到位。ASR 端點見 `asr.md`，其全文皆為已實作行為。
+
+現階段三個缺口，各自在下文標註：**分塊串流**（§5.4）與 **mp3 輸出**（§5.3）帶了會回 400；**文字正規化與台灣讀音處理**（§5.1）則是靜默的品質落差，那是唯一需要 provider 現在就知道的。
 
 引擎為 VoxCPM2，經 vLLM-Omni 提供。引擎細節不外露於本契約——除了本文明列的行為外，消費端不應對引擎做任何假設。
 
@@ -99,15 +101,21 @@ OpenAI `/v1/audio/speech` 相容形狀，加上本專案的擴充欄位。
 | `model` | 字串 | 否 | 清單中唯一值 | 取自 `GET /api/tts/models` |
 | `input` | 字串 | 是 | — | 要合成的文字 |
 | `voice` | 字串 | 是 | — | 音色 `id`，取自 `GET /api/tts/voices` |
-| `response_format` | `"wav"` \| `"mp3"` \| `"pcm"` | 否 | `"wav"` | 輸出容器 |
-| `stream` | 布林 | 否 | `false` | 分塊串流回應 |
+| `response_format` | `"wav"` \| `"mp3"` \| `"pcm"` | 否 | `"wav"` | 輸出容器。**mp3 尚未實作**，帶了回 400 |
+| `stream` | 布林 | 否 | `false` | 分塊串流回應。**尚未實作**，`true` 回 400 `STREAM_UNSUPPORTED` |
 | `instruct` | 字串 | 否 | — | Instruction：控制發聲方式的自然語言指示，寫聲學特徵而非情緒名稱，見 §5.2 |
 
-**`input` 是純文字，控制標記由 BFF 全權處理。** BFF 會對它做文字正規化與讀音處理（數字、單位、金額展開，台灣破音字鎖定）。
+`input` 有長度上限，預設 2000 字元，超過回 413 `INPUT_TOO_LONG`。逐句合成遠低於此，上限擋的是整篇文章一次灌進來。
+
+**`input` 是純文字，控制標記由 BFF 全權處理。**
+
+**文字正規化與讀音處理尚未實作。** 契約上 BFF 應對 `input` 做數字、單位、金額的口語展開與台灣破音字鎖定，目前**沒有**：文字原樣進模型，數字唸法與破音字會落到模型自己的預設，而那是 zh-CN 的行為。這不會回錯誤，只會唸錯——`3kg` 與「一行」這類詞現在不保證正確。管線已選型（`wetext` + OpenCC s2tw + g2pW 的台灣注音模型），實作尚無票。
 
 送進來的文字中，**大括號 `{...}` 與半形括號 `(...)` 都會被中性化**——前者是讀音標記的保留語法，後者是風格指令的保留語法。這是安全邊界不是潔癖：`instruct` 由 BFF 組成 `(...)` 前綴併入文字送給模型，若使用者文字裡的半形括號原樣通過，一句 `(笑)` 就會變成語氣指令；而 `instruct` 裡的 `)` 也能跳出前綴注入任意內容。
 
 需要在音訊裡唸出括號內容時，改用全形括號 `（）`。
+
+**`<|...|>` 形式的標記會整段移除。** 那是模型的特殊 token 語法，原樣通過會讓模型看到控制訊號而非字面內容。同樣的處理在 ASR 的 Hotword 清洗上已經做了。
 
 ### 5.2 `instruct` 的行為
 
@@ -132,12 +140,16 @@ HTTP 200，body 為二進位音訊，`Content-Type` 依 `response_format`：
 | `response_format` | `Content-Type` | 格式 |
 |---|---|---|
 | `wav` | `audio/wav` | 24 kHz、單聲道、16-bit PCM，帶 44 bytes 標準 RIFF 標頭 |
-| `mp3` | `audio/mpeg` | 24 kHz、單聲道 |
-| `pcm` | `audio/L16` | 24 kHz、單聲道、16-bit little-endian，**無標頭** |
+| `mp3` | `audio/mpeg` | 24 kHz、單聲道。**尚未實作**，回 400 `UNSUPPORTED_RESPONSE_FORMAT` |
+| `pcm` | `audio/L16;rate=24000` | 24 kHz、單聲道、16-bit little-endian，**無標頭** |
 
 **wav 的取樣率、聲道數與位元深度為契約的一部分**（ADR-0003），不會因引擎更換而改變。要直接拿 PCM 的話用 `response_format: "pcm"`，比自己剝 wav 標頭可靠。
 
+`pcm` 的 `Content-Type` 帶 `rate` 參數（RFC 2586 列為必填）：裸 PCM 沒有標頭，取樣率只能從這裡讀。解析 `Content-Type` 時要容忍參數，不要拿整個字串去比對 `audio/L16`。
+
 ### 5.4 成功回應（`stream: true`）
+
+> **尚未實作。** 帶 `stream: true` 一律回 400 `STREAM_UNSUPPORTED`，不會靜默退回非串流——後者會讓依本節實作 chunk 閒置逾時的 provider，在合成超過門檻時把一個正常的回合判成失敗。本節以下為規格，實作時同步移除本註記。
 
 HTTP 200，`Transfer-Encoding: chunked`。音訊以多個 chunk 送出，可邊收邊播。
 
@@ -168,11 +180,9 @@ BFF 對重量級請求有全域併發上限，預設 8。達上限時**不排隊
 
 已知的行為特性：
 
-- 同一個 `voice` 連續使用會命中伺服器端的音色特徵快取，第二次之後較快。頻繁在多個音色間切換會失去這個好處。
+- 同一個 `voice` 連續使用會命中伺服器端的**參考音解析快取**（以內容雜湊為鍵），省掉重複解碼。但**特徵抽取每次都會重做**——那層快取只服務預先註冊的音色，而本服務走的是逐次傳參考音的路徑。所以固定用少數幾個音色仍有好處，只是不如「第二次之後明顯變快」那麼大。依據見 `../superpowers/specs/2026-08-05-voxcpm2-serving-transport.md` §3.3.1。
 - 服務冷啟後的第一個請求明顯較慢（模型編譯與 graph capture）。
-- `stream: true` 縮短的是**首音**延遲，不縮短整段完成時間。
-
-要低延遲就用 `stream: true` + `response_format: "pcm"`，並固定使用少數幾個音色。
+- `stream: true` 縮短的是**首音**延遲，不縮短整段完成時間。**串流尚未實作**，故目前沒有降低首音延遲的手段，能做的只有固定使用少數幾個音色以命中特徵快取。
 
 ---
 
@@ -190,8 +200,9 @@ BFF 對重量級請求有全域併發上限，預設 8。達上限時**不排隊
 |---|---|---|
 | 400 | `VALIDATION_ERROR` | 缺必填欄位、型別不符 |
 | 400 | `UNSUPPORTED_MODEL` | `model` 不在 `GET /api/tts/models` 清單中 |
-| 400 | `UNSUPPORTED_RESPONSE_FORMAT` | `response_format` 非三個允許值 |
-| 400 | `STREAM_FORMAT_UNSUPPORTED` | `stream: true` 搭配 `response_format: "mp3"` |
+| 400 | `UNSUPPORTED_RESPONSE_FORMAT` | `response_format` 非三個允許值，或為尚未實作的 `mp3` |
+| 400 | `STREAM_UNSUPPORTED` | `stream: true`。分塊串流尚未實作 |
+| 400 | `STREAM_FORMAT_UNSUPPORTED` | `stream: true` 搭配 `response_format: "mp3"`。**串流實作後才會出現**，目前 `stream: true` 一律先撞上 `STREAM_UNSUPPORTED` |
 | 400 | `EMPTY_INPUT` | `input` 為空，或經正規化後為空 |
 | 403 | `ORIGIN_FORBIDDEN` | 帶 `Origin`／`Referer` 且非白名單、非同源。server-to-server 不會遇到 |
 | 404 | `VOICE_NOT_FOUND` | `voice` 對應的音色不存在或已被刪除 |
@@ -247,7 +258,7 @@ curl -X POST http://10.2.66.102:8088/api/tts/speech \
   }'
 ```
 
-### 串流取 PCM
+### 串流取 PCM（尚未實作，目前回 400 `STREAM_UNSUPPORTED`）
 
 ```bash
 curl -N -X POST http://10.2.66.102:8088/api/tts/speech \
@@ -290,7 +301,7 @@ curl -N -X POST http://10.2.66.102:8088/api/tts/speech \
 | 音色綁定 | 以 `id` 綁定，不以 `name` |
 | 音色清單 | 啟動時拉取，收到 404 `VOICE_NOT_FOUND` 時重拉 |
 | 回應解析 | 先看 `Content-Type` 再決定是否解析 JSON |
-| 串流結束判定 | 連線關閉即結束，無終止幀。正常結束與中途失敗在協定層不可區分，用 chunk 間閒置逾時（建議 10 秒）偵測失敗 |
+| 串流結束判定 | **串流尚未實作**，以下三列在它上線前不需要處理。連線關閉即結束，無終止幀。正常結束與中途失敗在協定層不可區分，用 chunk 間閒置逾時（建議 10 秒）偵測失敗 |
 | 串流格式 | 用 `pcm`；用 `wav` 時須容忍長度欄位為 `0xFFFFFFFF` |
 | 串流失敗 | 不重試整段 |
 | 併發 | 處理 503，退避後重試。額度與 ASR 共用 |

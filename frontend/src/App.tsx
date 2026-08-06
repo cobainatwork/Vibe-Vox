@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { AsrPanel } from "./AsrPanel";
 import { HotwordsPanel } from "./HotwordsPanel";
+import { TtsPanel } from "./TtsPanel";
 import { VoicesPanel } from "./VoicesPanel";
 import { fetchHealth } from "./api";
 import {
@@ -140,6 +141,8 @@ export function App() {
           <AsrPanel health={state.status === "ready" ? state.health : null} />
         ) : active === "voices" ? (
           <VoicesPanel />
+        ) : active === "tts" ? (
+          <TtsPanel health={state.status === "ready" ? state.health : null} />
         ) : (
           <SectionPanel section={active} state={state} />
         )}

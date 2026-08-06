@@ -1,12 +1,15 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import * as tts from "./tts";
 import { VoicesPanel } from "./VoicesPanel";
 import * as api from "./voices";
 
 vi.mock("./voices");
+vi.mock("./tts");
 
 const mockedApi = vi.mocked(api);
+const mockedTts = vi.mocked(tts);
 
 function voice(over: Partial<api.Voice> = {}): api.Voice {
   return {
@@ -25,6 +28,29 @@ function voice(over: Partial<api.Voice> = {}): api.Voice {
 
 describe("VoicesPanel", () => {
   afterEach(() => vi.clearAllMocks());
+
+  it("試聽走與消費端相同的合成端點", async () => {
+    // 試聽若另走一條路，這裡聽起來正常而 AI_practise 拿到的東西壞掉時沒有人會發現。
+    mockedApi.listVoices.mockResolvedValue([voice()]);
+    mockedTts.synthesizeSpeech.mockResolvedValue(new Blob([new Uint8Array([1])]));
+    URL.createObjectURL = vi.fn(() => "blob:fake");
+    URL.revokeObjectURL = vi.fn();
+
+    render(<VoicesPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "試聽" }));
+
+    await waitFor(() =>
+      expect(mockedTts.synthesizeSpeech).toHaveBeenCalledWith(
+        expect.objectContaining({ voice: "v1" }),
+      ),
+    );
+    expect(await screen.findByLabelText("試聽 客戶-中年男性")).toHaveAttribute(
+      "src",
+      "blob:fake",
+    );
+    // 試聽不改動任何資料，不該觸發清單重抓——載入時那一次以外不應該有第二次。
+    expect(mockedApi.listVoices).toHaveBeenCalledTimes(1);
+  });
 
   it("沒有音色時說明系統不附任何音色", async () => {
     mockedApi.listVoices.mockResolvedValue([]);

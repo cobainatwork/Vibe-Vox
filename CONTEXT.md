@@ -62,6 +62,10 @@ _Avoid_: 設計聲音、生成音色
 控制發聲方式的自然語言指示，以聲學特徵（音量、語速、句尾走向）表述而非情緒名稱。兩型 Voice 皆生效。
 _Avoid_: prompt（此詞在 ASR 已另有所指）、風格描述、情緒指令（實測情緒名稱無效，見 `docs/api/tts.md`）
 
+**Utterance（合成單位）**：
+一次合成呼叫承載的一句文字與其 Instruction。是 TTS 側的單位，**與 ASR 的 Segment、消費端的 Turn 都無關**——那兩者的 `_Avoid_` 都列了 utterance，指的是「不要用 utterance 稱呼它們」，不是禁止本詞條。分成獨立單位的理由是模型限制：一次呼叫只承載一種 Instruction，要逐句換語氣就得逐句呼叫。
+_Avoid_: 句子（切句規則不在此層）、語句、片段
+
 **定版（Pinning）**：
 建立 Voice design 時執行一次生成並擷取輸出音檔存為參考音的動作，使該音色之後可穩定重現。
 _Avoid_: 快照、固定
