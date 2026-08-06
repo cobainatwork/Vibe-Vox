@@ -17,9 +17,11 @@ from vibe_vox.adapters.stub import (
 )
 from vibe_vox.adapters.vllm_asr import AsrTimeout, AsrUnavailable, VllmAsrClient
 from vibe_vox.api.admin_hotwords import router as admin_hotwords_router
+from vibe_vox.api.admin_voices import InvalidVoiceName, router as admin_voices_router
 from vibe_vox.api.asr import InvalidExtraTerms, router as asr_router
 from vibe_vox.api.health import router as health_router
 from vibe_vox.api.hotwords import router as hotwords_router
+from vibe_vox.api.tts import router as tts_router
 from vibe_vox.audio.errors import (
     FileTooLarge,
     TranscodeError,
@@ -28,12 +30,13 @@ from vibe_vox.audio.errors import (
 )
 from vibe_vox.audio.intake import AudioIntake
 from vibe_vox.config import Settings
-from vibe_vox.files.cleanup import cleanup_expired_temp_files
+from vibe_vox.files.cleanup import cleanup_expired_temp_files, sweep_orphan_voice_files
 from vibe_vox.hotword_io import ImportLimitExceeded, ImportParseError
 from vibe_vox.hotword_text import ContextBudgetExceeded, InvalidHotwordTerm
 from vibe_vox.middleware.limits import HeavyRequestGuard, HeavyRequestRejected
 from vibe_vox.middleware.origin import OriginGuardMiddleware
 from vibe_vox.persistence.hotwords import HotwordNotFound, HotwordRepository
+from vibe_vox.persistence.voices import VoiceNameTaken, VoiceNotFound, VoiceRepository
 
 
 def _default_asr_client(settings: Settings) -> AsrClient:
@@ -71,6 +74,8 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         cleanup_expired_temp_files(settings.temp_dir, settings.temp_max_age_seconds)
+        # 刪除音色只移除 DB 列（避免與進行中的合成競態），實體檔在此回收。
+        sweep_orphan_voice_files(settings.voice_dir, settings.db_path)
         yield
 
     app = FastAPI(title="Vibe-Vox BFF", lifespan=lifespan)
@@ -84,6 +89,7 @@ def create_app(
         timeout_seconds=settings.ffmpeg_timeout_seconds,
     )
     app.state.hotwords = HotwordRepository(settings.db_path)
+    app.state.voices = VoiceRepository(settings.db_path)
     app.state.heavy_guard = HeavyRequestGuard(
         max_concurrent=settings.max_concurrent_heavy_requests,
         timeout_seconds=settings.request_timeout_seconds,
@@ -147,6 +153,45 @@ def create_app(
 
     app.add_exception_handler(HotwordNotFound, _on_hotword_not_found)
 
+    async def _on_voice_not_found(request, exc: VoiceNotFound) -> JSONResponse:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": {
+                    "code": "VOICE_NOT_FOUND",
+                    "message": "音色不存在或已被刪除。",
+                }
+            },
+        )
+
+    app.add_exception_handler(VoiceNotFound, _on_voice_not_found)
+
+    async def _on_voice_name_taken(request, exc: VoiceNameTaken) -> JSONResponse:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": {
+                    "code": "VOICE_NAME_TAKEN",
+                    "message": f"音色名稱「{exc.name}」已存在，請改用其他名稱。",
+                }
+            },
+        )
+
+    app.add_exception_handler(VoiceNameTaken, _on_voice_name_taken)
+
+    async def _on_invalid_voice_name(request, exc: InvalidVoiceName) -> JSONResponse:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "code": "INVALID_VOICE_NAME",
+                    "message": "音色名稱不可為空，且長度不得超過 200 字元。",
+                }
+            },
+        )
+
+    app.add_exception_handler(InvalidVoiceName, _on_invalid_voice_name)
+
     async def _on_validation_error(request, exc: RequestValidationError) -> JSONResponse:
         # spec：格式或欄位驗證失敗回 400，並統一為 {error:{code,message}} 信封。
         return JSONResponse(
@@ -204,4 +249,6 @@ def create_app(
     app.include_router(hotwords_router)
     app.include_router(admin_hotwords_router)
     app.include_router(asr_router)
+    app.include_router(tts_router)
+    app.include_router(admin_voices_router)
     return app

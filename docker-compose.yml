@@ -17,9 +17,10 @@ services:
       # bff/tests/test_config.py 會讀本檔確認兩處都佈線且值相同。
       VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS: "${VIBE_VOX_ALIGNER_MAX_BATCH_ITEMS:-8}"
     volumes:
-      # SQLite 單檔的家。不掛則資料只在容器可寫層，起新容器即遺失（#33，見
-      # docs/spec.md 的「持久化」）。掛載點與 VIBE_VOX_DB_PATH 定義於 bff/Dockerfile。
-      # **不要在此覆寫 VIBE_VOX_DB_PATH**：指到 /data 之外會讓資料靜默回到可寫層，
+      # SQLite 單檔與音色參考音的家。不掛則資料只在容器可寫層，起新容器即遺失
+      # （#33，見 docs/spec.md 的「持久化」）。掛載點與 VIBE_VOX_DB_PATH、
+      # VIBE_VOX_VOICE_DIR 定義於 bff/Dockerfile。
+      # **不要在此覆寫那兩個路徑**：指到 /data 之外會讓資料靜默回到可寫層，
       # volume 照掛但沒人用，且不會報錯。
       - bff_data:/data
     depends_on:

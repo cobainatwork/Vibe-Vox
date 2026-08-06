@@ -45,6 +45,9 @@ class Settings:
     hotword_import_max_rows: int = field(
         default_factory=_env("VIBE_VOX_HOTWORD_IMPORT_MAX_ROWS", "10000", int)
     )
+    # 音色參考音的存放目錄。須與 temp_dir 分開並置於持久化 volume：參考音是
+    # 音色的一部分，隨容器銷毀等同音色消失（同 #33 對資料庫的處置）。
+    voice_dir: Path = field(default_factory=_env("VIBE_VOX_VOICE_DIR", "var/voices", Path))
     # 暫存資料夾與孤兒檔保留期（秒）；啟動序列據此回收過期檔。
     temp_dir: Path = field(default_factory=_env("VIBE_VOX_TEMP_DIR", "var/tmp", Path))
     temp_max_age_seconds: float = field(
