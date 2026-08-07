@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from vibe_vox.adapters.base import CONTRACT_SPEC, Utterance
 from vibe_vox.audio.wav import wrap_pcm
 from vibe_vox.persistence.voices import VoiceNotFound
-from vibe_vox.tts_text import has_speakable_content
+from vibe_vox.tts_text import to_speakable
 
 router = APIRouter()
 
@@ -133,18 +133,18 @@ def _to_utterance(body: SpeechRequest, *, max_chars: int) -> Utterance:
     """把請求的文字欄位清洗成一句可合成的內容。
 
     一次請求只承載一種語氣（契約 §5.2），故整段共用同一個 instruct；切句尚未實作。
-    控制語法的中性化不在此處——那是 Utterance 自己的不變量（見 adapters/base.py）。
+
+    本層只做「文字層的事實 → HTTP 狀態碼」的映射。中性化、判空與 instruct 的正規化
+    都不在此：前兩者由 `to_speakable` 一併完成（分開就會量錯順序），後者是 Utterance
+    自己的不變量（見 adapters/base.py）。
     """
-    text = body.input.strip()
-    if not has_speakable_content(text):
+    text = to_speakable(body.input)
+    if text is None:
         raise EmptyInput()
+    # 量的是中性化後的長度：被移除的字元不該算進額度（見 to_speakable）。
     if len(text) > max_chars:
         raise InputTooLong(len(text), max_chars)
-
-    # 純空白的 instruct 視同沒給：adapter 會把它組成「(   )」前綴，而括號不被剝除，
-    # 模型會把空前綴當成要處理的內容，而非依契約 §5.2 退回音色本身的語氣。
-    instruct = (body.instruct or "").strip()
-    return Utterance(text=text, instruct=instruct or None)
+    return Utterance(text=text, instruct=body.instruct)
 
 
 @router.post("/api/tts/speech", response_class=Response, openapi_extra=_OPENAPI_RESPONSES)

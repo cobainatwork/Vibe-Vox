@@ -26,7 +26,16 @@ _SPECIAL_TOKEN = re.compile(r"<\|.*?\|>")
 
 
 def sanitize_text(raw: str) -> str:
-    without_tokens = _SPECIAL_TOKEN.sub("", raw)
+    """剝除特殊 token 標記與控制字元。
+
+    **標記的移除跑到不動點而非只跑一次。** `<\\|.*?\\|>` 是非貪婪匹配，移除一層之後
+    殘骸可能重新組成一個合法的標記：`<<||>|speaker:1|>` 的中間段 `<||>` 被吃掉後剩下
+    `<|speaker:1|>`，那仍是特殊 token 標記，會原樣進 Context prompt。收斂必然終止：
+    每一輪都嚴格縮短字串。TTS 側的 `tts_text.neutralize_control_syntax` 同此。
+    """
+    without_tokens = raw
+    while (stripped := _SPECIAL_TOKEN.sub("", without_tokens)) != without_tokens:
+        without_tokens = stripped
     without_controls = "".join(
         ch for ch in without_tokens if unicodedata.category(ch) != "Cc"
     )

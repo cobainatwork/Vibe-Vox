@@ -219,6 +219,38 @@ def test_speech_emoji_only_input_rejected(tmp_path):
     assert resp.json()["error"]["code"] == "EMPTY_INPUT"
 
 
+def test_speech_input_that_neutralization_empties_is_rejected(tmp_path):
+    # 契約 §6 的 EMPTY_INPUT 明寫「input 為空，**或經正規化後為空**」。`<|...|>` 特殊
+    # token 標記整段會被中性化移除（tts_text 的 _SPECIAL_TOKEN），故這種輸入正規化後
+    # 就是空的。
+    #
+    # 判空若量在中性化之前，`i`／`m`／`e`／`n`／`d` 這些字母會讓它通過：請求佔一個
+    # heavy guard 額度、打一次 GPU、回一段空音訊 200。判空與中性化必須是同一個步驟。
+    client = _client(tmp_path)
+    voice = _create_voice(client)
+
+    resp = client.post(
+        "/api/tts/speech", json={"input": "<|im_end|>", "voice": voice["id"]}
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "EMPTY_INPUT"
+
+
+def test_speech_length_limit_applies_after_neutralization(tmp_path):
+    # 長度同樣量在中性化之後：`<|...|>` 標記會被整段移除，拿它撐長度等於用一段不會被
+    # 合成的內容換掉真正的額度。反過來也成立——正常文字不該因為含這種標記而被誤擋。
+    client = _client_with(tmp_path, StubTtsClient(), tts_max_input_chars=10)
+    voice = _create_voice(client)
+
+    resp = client.post(
+        "/api/tts/speech",
+        json={"input": "<|im_end|>你好嗎", "voice": voice["id"]},
+    )
+
+    assert resp.status_code == 200  # 中性化後只剩 3 字，未超過上限 10
+
+
 def test_speech_overlong_input_rejected_with_limits_in_message(tmp_path):
     # 契約 §6：413 的 message 要含實際值與上限，否則消費端只能猜要砍到多短。
     client = _client_with(tmp_path, StubTtsClient(), tts_max_input_chars=10)

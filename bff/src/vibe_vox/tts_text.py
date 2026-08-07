@@ -31,8 +31,18 @@ _SPECIAL_TOKEN = re.compile(r"<\|.*?\|>")
 
 
 def neutralize_control_syntax(text: str) -> str:
-    """移除特殊 token 標記，並把控制語法的保留字元轉為全形等價物。"""
-    return _SPECIAL_TOKEN.sub("", text).translate(_NEUTRALIZED)
+    """移除特殊 token 標記，並把控制語法的保留字元轉為全形等價物。
+
+    **移除跑到不動點而非只跑一次。** `<\\|.*?\\|>` 是非貪婪匹配，移除一層之後殘骸可能
+    重新組成一個合法的標記：`<<||>|x|>` 的中間段 `<||>` 被吃掉後剩下 `<|x|>`，那仍是
+    特殊 token 標記。單次替換會讓它原樣送進 tokenizer。
+
+    收斂必然終止：每一輪都嚴格縮短字串，否則迴圈就結束了。全形轉換不需要迴圈——它是
+    冪等的（全形字元不在對照表裡）。
+    """
+    while (stripped := _SPECIAL_TOKEN.sub("", text)) != text:
+        text = stripped
+    return text.translate(_NEUTRALIZED)
 
 
 # 不發音的 Unicode 大類：標點（P）、分隔（Z）、符號（S，含 emoji）、控制字元（C）。
@@ -40,13 +50,36 @@ def neutralize_control_syntax(text: str) -> str:
 _SILENT_CATEGORIES = ("P", "Z", "S", "C")
 
 
-def has_speakable_content(text: str) -> bool:
+def _has_speakable_content(text: str) -> bool:
     """判斷文字裡是否有唸得出來的東西。
 
     契約 §7 把「只有標點或空白」與「只有 emoji」都算成空輸入：送出去只會拿到一段沒有
     內容的音訊，還佔一次 GPU。以 Unicode 大類判斷而非列舉標點表——後者永遠列不完，
     而全形、半形與各語系的標點都得算進去。
+
+    私有：它**只在中性化之後**才有意義，見 `to_speakable`。
     """
     return any(
         unicodedata.category(ch)[0] not in _SILENT_CATEGORIES for ch in text
     )
+
+
+def to_speakable(raw: str) -> str | None:
+    """把使用者輸入化為可送去合成的文字；沒有可唸的內容時回 `None`。
+
+    **中性化與判空是同一個不可分割的步驟**，這是本函式存在的唯一理由。兩者分屬兩處
+    時，判空必然量在中性化之前——而 `<|im_end|>` 這種整段會被移除的輸入，靠 `i`／`m`
+    ／`e`／`n`／`d` 這幾個字母就能通過判空，接著佔一個 heavy guard 額度、打一次 GPU、
+    回一段空音訊 200。契約 §6 要的是 400 `EMPTY_INPUT`（「input 為空，或經正規化後為
+    空」）。
+
+    長度上限也必須量在回傳值上而非原始輸入上，理由同上：被移除的字元不該算進額度。
+    故 strip 在中性化**之後**——標記兩側的空白在移除標記後才浮出來，先 strip 會讓它們
+    留在字串裡繼續吃額度。
+
+    回 `None` 而不自己拋例外：端點層已經有 `EmptyInput` 與其 handler，本層再定義一個
+    等價的例外型別只是多一次轉換。（同層的 `hotword_text.clean_term` 確實拋例外，那是
+    因為它沒有對應的端點層型別可用。）
+    """
+    text = neutralize_control_syntax(raw).strip()
+    return text if _has_speakable_content(text) else None

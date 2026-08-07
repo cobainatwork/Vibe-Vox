@@ -158,20 +158,40 @@ class Utterance(BaseModel):
     **控制語法的中性化由本型別保證，不是呼叫端的責任。** instruct 由 adapter 組成行內
     `(...)` 前綴併入同一個字串，故未中性化的括號能讓使用者文字變成風格指令，或讓
     instruct 跳出自己的前綴。靠呼叫端記得做的話，第二個呼叫端就是漏洞。
+
+    **純空白的 instruct 視同沒給**，同屬本型別的不變量而非呼叫端的責任：adapter 會把
+    它組成「(   )」前綴，而括號不被剝除，模型會把空前綴當成要處理的內容，而非依契約
+    §5.2 退回音色本身的語氣。它與中性化是同一類東西（都在決定「送出去的字串長什麼
+    樣」），分屬兩層就會有一層忘記做。
+
+    **保證的範圍以正常建構為限。** `Utterance(...)` 與屬性指派會過 validator；pydantic
+    的 `model_construct()` 與 `model_copy(update=...)` 依設計跳過驗證，兩者都繞得過。
+    這不是疏漏而是 pydantic 的逃生口，但要知道它在哪：切句實作時最自然的寫法正是
+    `model_copy(update={"text": chunk})`，而那條路不會中性化——切句應改為重新建構。
     """
 
-    # frozen + validate_assignment 讓上面那句「由本型別保證」真的成立：沒有它，
-    # `u.text = "(evil)"`、`model_construct()` 與 `model_copy(update=...)` 三條路都
-    # 繞過 validator，而 docstring 宣稱的保證範圍會比實際大。
-    model_config = ConfigDict(frozen=True, validate_assignment=True)
+    # frozen 擋住屬性指派那條路（`u.text = "(evil)"`）。另外兩條見上方 docstring：
+    # pydantic 的逃生口關不掉，只能寫明。
+    model_config = ConfigDict(frozen=True)
 
     text: str
     instruct: str | None = None
 
-    @field_validator("text", "instruct")
+    @field_validator("text")
     @classmethod
-    def _neutralize(cls, v: str | None) -> str | None:
-        return neutralize_control_syntax(v) if v else v
+    def _neutralize_text(cls, v: str) -> str:
+        # strip 與 instruct 那條同理：本型別的職責是「送出去的字串長什麼樣」，頭尾空白
+        # 屬於那個問題。端點的 to_speakable 已經 strip 過，但第二個呼叫端（切句）不會。
+        return neutralize_control_syntax(v).strip()
+
+    @field_validator("instruct")
+    @classmethod
+    def _neutralize_instruct(cls, v: str | None) -> str | None:
+        if not v:
+            return None
+        # 中性化後才判空白：順序反過來的話，只含控制語法的 instruct 會留下一個中性化
+        # 後為空、卻不是 None 的字串，adapter 照樣組出空前綴。
+        return neutralize_control_syntax(v).strip() or None
 
 
 class TtsUnavailable(Exception):

@@ -33,9 +33,14 @@ export async function listTtsVoices(): Promise<TtsVoice[]> {
 }
 
 export async function synthesizeSpeech(req: SpeechRequest): Promise<Blob> {
-  const body: SpeechRequest = { input: req.input, voice: req.voice };
-  // 空字串不進 body：後端會把它組成「(  )」前綴，而括號原樣進模型的 text token 串。
-  if (req.instruct?.trim()) body.instruct = req.instruct;
+  // instruct 原樣送出（未給時 JSON.stringify 自然省略）。**空白或只含控制語法的
+  // instruct 不在此擋**：那是「送出去的字串長什麼樣」的問題，由後端的 Utterance 這
+  // 一個型別擁有（契約 §7）。前端再擋一次只會多一份需要跟著後端改的規則。
+  const body: SpeechRequest = {
+    input: req.input,
+    voice: req.voice,
+    instruct: req.instruct,
+  };
 
   const resp = await fetch("/api/tts/speech", {
     method: "POST",

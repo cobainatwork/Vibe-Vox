@@ -41,8 +41,11 @@ describe("tts API client", () => {
     });
   });
 
-  it("synthesizeSpeech 空 instruct 不進 body", async () => {
-    // 契約 §5.2：instruct 未給時語氣由音色本身決定。送空字串會讓後端組出空前綴。
+  it("synthesizeSpeech 未給 instruct 時不送該欄位", async () => {
+    // 契約 §5.2：instruct 未給時語氣由音色本身決定。
+    //
+    // **空白的 instruct 刻意不在此擋**：它由後端的 Utterance 視同沒給（契約 §7）。
+    // 前端再擋一次是同一條規則的第二份，而那份會在後端改動時悄悄變成錯的記載。
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -50,7 +53,7 @@ describe("tts API client", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await synthesizeSpeech({ input: "您好", voice: "v1", instruct: "" });
+    await synthesizeSpeech({ input: "您好", voice: "v1" });
 
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
       input: "您好",
