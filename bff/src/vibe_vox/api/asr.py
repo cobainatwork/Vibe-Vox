@@ -2,6 +2,9 @@
 
 回合制批次辨識。回應為消費端契約形狀（不套管理平面的 {data} 信封，見 ADR-0003）。
 
+辨識鏈路本身（音檔輸入 → 辨識 → 對齊 → 合理性檢查）屬 `transcription.Transcriber`，
+本層只做 HTTP 的事：multipart 解析、`extra_terms` 驗證、併發護欄與回應信封。
+
 #28 起附字級時間戳（ADR-0004）。對齊是附加功能，其失效不得使逐字稿一併不可得——該
 降級由 `AlignerClient.align` 保證（它不拋出，逐段以 omission 說明原因），故本層沒有
 對齊相關的例外處理，也**不往上映射成 502／504**。
@@ -11,10 +14,8 @@ import json
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 
-from vibe_vox.adapters.base import AlignerClient, AsrClient
-from vibe_vox.alignment import merge_alignment
-from vibe_vox.audio.slice import wav_duration
 from vibe_vox.hotword_text import compile_context, enforce_context_budget, sanitize_text
+from vibe_vox.transcription import Transcriber
 
 router = APIRouter()
 
@@ -49,10 +50,8 @@ async def transcribe(
     replace_context: bool = Form(False),
 ) -> dict:
     settings = request.app.state.settings
-    intake = request.app.state.audio_intake
-    asr: AsrClient = request.app.state.asr_client
-    aligner: AlignerClient = request.app.state.aligner_client
     repo = request.app.state.hotwords
+    transcriber: Transcriber = request.app.state.transcriber
 
     extra = _parse_extra_terms(extra_terms)
     enabled = [h["term"] for h in repo.list_enabled()]
@@ -64,23 +63,8 @@ async def transcribe(
     # client 自身的逾時（→ 504 ASR_TIMEOUT／對齊降級）先觸發，guard 為總體 backstop。
     # 預算由 Settings 計算而非在此相加，測試用同一個方法比對 nginx 的逾時（#35）。
     async with guard.slot(timeout_seconds=settings.heavy_request_budget()):
-        async with intake.transcoded(
-            _stream(file), sample_rate=settings.asr_sample_rate
-        ) as wav:
-            result = await asr.transcribe(wav, context=context)
-            audio_duration = wav_duration(wav)
-            # 對齊不可得不會拋出：降級是 AlignerClient 的保證，端點層無須攔截，
-            # 也無從攔截——降級後仍要每段的切片範圍，而那只有 adapter 算得出來。
-            alignments = await aligner.align(wav, result.segments)
+        transcription = await transcriber.transcribe(_stream(file), context=context)
 
-    segments, alignment = merge_alignment(
-        result.segments, alignments, audio_duration=audio_duration
-    )
-    return result.model_dump() | {
-        "segments": [s.model_dump() for s in segments],
-        # duration 的定義不變（所有 Segment 的 End 最大值），但段界已重算為末字 End，
-        # 故其值隨對齊改變。
-        "duration": max((s.End for s in segments), default=0.0),
-        "alignment": alignment.model_dump(),
-        "applied_context": context,
-    }
+    # applied_context 由本層附加：它是 Hotword 編譯的產物，屬另一個關注點，故不在
+    # Transcription 裡（見 transcription.py）。
+    return transcription.model_dump() | {"applied_context": context}

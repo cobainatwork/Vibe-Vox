@@ -26,3 +26,7 @@ packages = ["src/vibe_vox"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# 讓 `from fakes import ...` 穩固。不寫的話它只靠 pytest 預設 import mode 把 tests/
+# 推上 sys.path，而那個行為的前提是「tests/ 無 __init__.py」——有人加了它，或改用
+# importmode=importlib，共用替身就會 ModuleNotFoundError。
+pythonpath = ["tests"]

@@ -6,25 +6,24 @@ from vibe_vox.adapters.base import (
     CONTRACT_SPEC,
     Segment,
     SegmentAlignment,
-    TranscriptionResult,
+    AsrResult,
     Utterance,
 )
 from vibe_vox.audio.wav import PcmAudio
 
 # dev / 無 GPU 環境的預設假辨識，讓 UI 在無模型服務時仍可操作。
-DEFAULT_STUB_ASR_RESULT = TranscriptionResult(
+DEFAULT_STUB_ASR_RESULT = AsrResult(
     segments=[
         Segment(Start=0.0, End=2.0, Speaker="語者 1", Content="（stub 模式假辨識）")
     ],
     raw_text="（stub 模式假辨識）",
     transcription_only="（stub 模式假辨識）",
-    duration=2.0,
 )
 
 
 class StubAsrClient:
     def __init__(
-        self, ready: bool = True, result: TranscriptionResult | None = None
+        self, ready: bool = True, result: AsrResult | None = None
     ) -> None:
         self._ready = ready
         self._result = result
@@ -33,7 +32,7 @@ class StubAsrClient:
     async def health(self) -> bool:
         return self._ready
 
-    async def transcribe(self, audio: Path, *, context: str) -> TranscriptionResult:
+    async def transcribe(self, audio: Path, *, context: str) -> AsrResult:
         self.last_context = context
         if self._result is None:
             raise RuntimeError("StubAsrClient 未設定 result")

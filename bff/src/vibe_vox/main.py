@@ -53,6 +53,7 @@ from vibe_vox.middleware.limits import HeavyRequestGuard, HeavyRequestRejected
 from vibe_vox.middleware.origin import OriginGuardMiddleware
 from vibe_vox.persistence.hotwords import HotwordNotFound, HotwordRepository
 from vibe_vox.persistence.voices import VoiceNameTaken, VoiceNotFound, VoiceRepository
+from vibe_vox.transcription import AudioSource, Transcriber
 
 
 def _default_asr_client(settings: Settings) -> AsrClient:
@@ -94,7 +95,7 @@ def create_app(
     asr_client: AsrClient | None = None,
     tts_client: TtsClient | None = None,
     settings: Settings | None = None,
-    audio_intake: AudioIntake | None = None,
+    audio_intake: AudioSource | None = None,
     aligner_client: AlignerClient | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
@@ -111,10 +112,19 @@ def create_app(
     app.state.asr_client = asr_client or _default_asr_client(settings)
     app.state.aligner_client = aligner_client or _default_aligner_client(settings)
     app.state.tts_client = tts_client or _default_tts_client(settings)
-    app.state.audio_intake = audio_intake or AudioIntake(
-        temp_dir=settings.temp_dir,
-        max_bytes=settings.audio_max_bytes,
-        timeout_seconds=settings.ffmpeg_timeout_seconds,
+    # 一次辨識的鏈路由 Transcriber 擁有，端點只取這一個依賴（見 transcription.py）。
+    # intake 不進 app.state：辨識是它唯一的用途，音色的參考音走 save_upload 另一條路。
+    # 兩個 client 則留著——health 探測直接用 asr_client，且裝配是否正確由測試斷言它們。
+    app.state.transcriber = Transcriber(
+        intake=audio_intake
+        or AudioIntake(
+            temp_dir=settings.temp_dir,
+            max_bytes=settings.audio_max_bytes,
+            timeout_seconds=settings.ffmpeg_timeout_seconds,
+        ),
+        asr=app.state.asr_client,
+        aligner=app.state.aligner_client,
+        sample_rate=settings.asr_sample_rate,
     )
     app.state.hotwords = HotwordRepository(settings.db_path)
     app.state.voices = VoiceRepository(settings.db_path)

@@ -49,7 +49,7 @@ class Slice:
 def wav_duration(src: Path) -> float:
     """音檔的實際總長（秒）。
 
-    不可用 TranscriptionResult.duration 代替：那是所有 Segment 的 End 最大值，
+    不可用 Transcription.duration 代替：那是所有 Segment 的 End 最大值，
     尾端靜音不計入（docs/api/asr.md §4.2），而 alignment.audio_duration 要的是
     實際長度——結尾沉默時長正是由兩者的差算出。
     """

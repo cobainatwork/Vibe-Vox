@@ -22,7 +22,7 @@ from vibe_vox.adapters.base import (
     AsrTimeout,
     AsrUnavailable,
     Segment,
-    TranscriptionResult,
+    AsrResult,
 )
 from vibe_vox.adapters.zh import to_traditional
 
@@ -123,7 +123,7 @@ def _first_value(seg: dict, *keys: str, default: Any = None) -> Any:
     return default
 
 
-def _parse(content: str) -> TranscriptionResult:
+def _parse(content: str) -> AsrResult:
     """防禦性解析模型輸出：非 JSON 或缺欄位皆不崩潰，退回純文字。
 
     官方輸出為含 Start/End/Speaker/Content 的 segments，可能是 `{segments:[...]}`
@@ -158,13 +158,12 @@ def _parse(content: str) -> TranscriptionResult:
             )
         )
 
-    return TranscriptionResult(
+    return AsrResult(
         segments=segments,
         raw_text=content,
         transcription_only=(
             "".join(s.Content for s in segments) if segments else to_traditional(content)
         ),
-        duration=max((s.End for s in segments), default=0.0),
     )
 
 
@@ -195,7 +194,7 @@ class VllmAsrClient:
         except httpx.HTTPError:
             return False
 
-    async def transcribe(self, audio: Path, *, context: str) -> TranscriptionResult:
+    async def transcribe(self, audio: Path, *, context: str) -> AsrResult:
         audio_b64 = base64.b64encode(audio.read_bytes()).decode("ascii")
         data_url = f"data:audio/wav;base64,{audio_b64}"
         duration = await _audio_duration(audio)

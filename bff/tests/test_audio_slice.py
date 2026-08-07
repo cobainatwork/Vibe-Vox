@@ -35,7 +35,7 @@ def _read_frames(wav: bytes) -> list[int]:
 
 
 def test_wav_duration_reads_actual_length(tmp_path):
-    # alignment.audio_duration 要的是音檔實際總長，而 TranscriptionResult.duration
+    # alignment.audio_duration 要的是音檔實際總長，而 Transcription.duration
     # 是 Segment End 最大值——尾端靜音不計入，恆小於或等於實際長度
     # （docs/api/asr.md §4.2）。故不可用後者代替。
     src = _write_wav(tmp_path / "a.wav", frames=int(2.5 * _RATE))

@@ -42,13 +42,16 @@ class Word(BaseModel):
     End: float
 
 
-class TranscriptionResult(BaseModel):
-    """一次辨識的完整結果。applied_context 由端點層另行附加，不屬本結果。"""
+class AsrResult(BaseModel):
+    """ASR 模型端回的辨識結果，鏈路的第一手材料。
+
+    **不含 duration**：那是所有 Segment 的 End 最大值，而段界經 Forced alignment 後會
+    重算為末字的 End，故該值只有在對齊之後才確定，屬 `transcription.Transcription`。
+    """
 
     segments: list[Segment]
     raw_text: str
     transcription_only: str
-    duration: float
 
 
 class AsrUnavailable(Exception):
@@ -65,7 +68,7 @@ class AsrClient(Protocol):
         """回報 ASR 模型服務是否就緒。"""
         ...
 
-    async def transcribe(self, audio: Path, *, context: str) -> TranscriptionResult:
+    async def transcribe(self, audio: Path, *, context: str) -> AsrResult:
         """辨識正規化後的 wav，回帶語者與時間戳的分段結果。
 
         錯誤模式為 `AsrUnavailable` 與 `AsrTimeout`，實作須把自己的傳輸細節翻譯成

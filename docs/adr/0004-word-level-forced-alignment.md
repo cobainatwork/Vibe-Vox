@@ -81,6 +81,12 @@ VibeVoice 的切點時間戳降級為**切片依據**：段長 30–40 秒遠低
 
   呼叫端遵守上限，而不是把上限調到能吞下任意輸入。卡上的空間主要由 vLLM 決定（#31），而**它的三個記憶體參數原本從未被顯式設定**、跑在上游 `start_server.py` 的預設（utilization 0.8，佔 85%）。2026-08-05 已搬到 `docker-compose.yml` 並由 `.env` 覆寫、utilization 調至 0.70，辨識文字經逐字元驗證不變。**但三個模型是否共存得下仍未定案**：VoxCPM2 的需求仍是估算，且 aligner 的佔用會隨使用增長。量測值與待確認項見 HANDOFF.md 的 2.4 與 8.2。
 
+- **這條鏈路本身需要一個擁有者**（2026-08-07）。本文把「音檔 → `AudioIntake.transcoded()` → vLLM → aligner → BFF 合併與合理性檢查」畫成一條線，但沒指定誰擁有它，於是它落在 HTTP 端點的縮排裡。代價是 #33 至 #38 這六個修正裡有四個（#34／#35／#36／#37）必須同時改「某個內部 module」與「端點或 `config`」——因為沒有任何 module 擁有「一次辨識」這個概念，跨步驟的修正必然裂成兩三處。
+
+  現由 `bff/src/vibe_vox/transcription.py` 的 `Transcriber` 擁有。它持有的不只是步驟順序，還有兩者之間的**時序約束**：`audio_duration` 必須在 intake 的 context 內取得（離開時 wav 即刪除），而彙總發生在 context 外。那條約束以前只由縮排表達，改動時很容易把取值搬到 context 外而在執行期才炸。端點層剩下 multipart 解析、`extra_terms` 驗證、併發護欄與回應信封。
+
+  同時 `TranscriptionResult.duration` 移除：它是所有 Segment 的 End 最大值，而段界對齊後會重算為末字的 End，故該值只有在對齊之後才確定。由 ASR adapter 攜帶等於在鏈路第一步就算一個之後必被推翻的值——它確實無人消費，權威版本一直在端點層。現在只有 `Transcription` 擁有它。
+
 - **對齊的逾時是所有批次共用的一份預算**（2026-08-07）。#36 改為分批送出後，對齊的最壞牆鐘時間從「一次逾時」變成「批數 × 逾時」，而端點 guard 的預算（`config.heavy_request_budget`）只加了一次 `aligner_timeout_seconds`。63 段的會議錄音在 cap 8 之下是 8 批，服務掛住時對齊最壞 8 × 60 = 480 秒，超過 504 秒預算裡分給它的份額，於是 guard 會先觸發並回 504 `REQUEST_TIMEOUT`——**逐字稿一併喪失**，正是下方第二層降級要避免的結果。
 
   修法是讓語義回到「整體」而非放大預算：`HttpAlignerClient` 逐批扣減同一份預算，用盡後剩餘批次直接不送、標記未取得結果，已完成的批次結果留著。`heavy_request_budget` 的算式因此重新成立，不需要知道分批策略。
