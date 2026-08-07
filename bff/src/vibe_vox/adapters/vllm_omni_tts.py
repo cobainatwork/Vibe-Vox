@@ -16,20 +16,16 @@ from pathlib import Path
 
 import httpx
 
-from vibe_vox.adapters.base import CONTRACT_SPEC, Utterance
+from vibe_vox.adapters.base import (
+    CONTRACT_SPEC,
+    TtsTimeout,
+    TtsUnavailable,
+    Utterance,
+)
 from vibe_vox.audio.errors import TranscodeError, TranscodeTimeout
 from vibe_vox.audio.sniff import detect_audio_format
 from vibe_vox.audio.transcode import resample_wav_to_pcm
 from vibe_vox.audio.wav import InvalidWav, PcmAudio, read_pcm, wrap_pcm
-
-
-class TtsUnavailable(Exception):
-    """遠端 TTS 連不上、回非 2xx，或回的不是可解析的音訊（端點層映射 → 502）。"""
-
-
-class TtsTimeout(Exception):
-    """遠端 TTS 呼叫逾時（端點層映射 → 504）。"""
-
 
 # OpenAI schema 的必填欄位，VoxCPM2 語意上忽略（沒有內建語者）。
 _VOICE_PLACEHOLDER = "default"

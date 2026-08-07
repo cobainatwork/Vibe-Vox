@@ -51,6 +51,14 @@ class TranscriptionResult(BaseModel):
     duration: float
 
 
+class AsrUnavailable(Exception):
+    """ASR 模型服務連不上、回錯或回傳信封異常（`AsrClient` 的錯誤模式，映射 → 502）。"""
+
+
+class AsrTimeout(Exception):
+    """ASR 模型服務呼叫逾時（`AsrClient` 的錯誤模式，映射 → 504）。"""
+
+
 @runtime_checkable
 class AsrClient(Protocol):
     async def health(self) -> bool:
@@ -58,7 +66,12 @@ class AsrClient(Protocol):
         ...
 
     async def transcribe(self, audio: Path, *, context: str) -> TranscriptionResult:
-        """辨識正規化後的 wav，回帶語者與時間戳的分段結果。"""
+        """辨識正規化後的 wav，回帶語者與時間戳的分段結果。
+
+        錯誤模式為 `AsrUnavailable` 與 `AsrTimeout`，實作須把自己的傳輸細節翻譯成
+        這兩者。逐字稿是這條路徑的產出本身而非附加功能，故兩者都往上映射成狀態碼
+        （502／504），不像對齊那樣就地降級。
+        """
         ...
 
 
@@ -158,6 +171,15 @@ class Utterance(BaseModel):
         return neutralize_control_syntax(v) if v else v
 
 
+class TtsUnavailable(Exception):
+    """TTS 模型服務連不上、回非 2xx，或回的不是可解析的音訊
+    （`TtsClient` 的錯誤模式，映射 → 502）。"""
+
+
+class TtsTimeout(Exception):
+    """TTS 模型服務呼叫逾時（`TtsClient` 的錯誤模式，映射 → 504）。"""
+
+
 @runtime_checkable
 class TtsClient(Protocol):
     async def health(self) -> bool:
@@ -183,5 +205,14 @@ class TtsClient(Protocol):
         reference_audio 是音色身分的唯一錨點（ADR-0002 的定版產物或使用者上傳的
         參考音）。實作**不得**送出該參考音的逐字稿：送了會讓 VoxCPM2 落到 Hi-Fi
         模式並靜默忽略 instruct（docs/api/tts.md §5.2）。
+
+        錯誤模式為 `TtsUnavailable` 與 `TtsTimeout`，實作須把自己的傳輸細節翻譯成
+        這兩者。翻漏的例外會穿過端點層冒成 500，而 500 不在 docs/api/tts.md 的錯誤表
+        內——消費端拿到的是非契約形狀的回應，它的錯誤處理分支涵蓋不到。
+
+        **reference_audio 可讀是呼叫端的前置條件，目前無人保證。** 它指向不存在的檔案
+        時各實作行為不一致（一個冒 500、一個靜默回靜音），而 500 不在 docs/api/tts.md
+        的錯誤表內。真正的修法是讓可用性在 Voice 建立時成為該音色的不變量，追蹤於 #45
+        （時長超界是不同的缺口，見 #44）。
         """
         ...

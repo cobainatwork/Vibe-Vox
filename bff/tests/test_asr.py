@@ -15,6 +15,8 @@ from fastapi.testclient import TestClient
 
 from vibe_vox.adapters.aligner import HttpAlignerClient
 from vibe_vox.adapters.base import (
+    AsrTimeout,
+    AsrUnavailable,
     Omission,
     Segment,
     SegmentAlignment,
@@ -22,7 +24,7 @@ from vibe_vox.adapters.base import (
     Word,
 )
 from vibe_vox.adapters.stub import StubAlignerClient, StubAsrClient
-from vibe_vox.adapters.vllm_asr import AsrTimeout, AsrUnavailable, VllmAsrClient
+from vibe_vox.adapters.vllm_asr import VllmAsrClient
 from vibe_vox.audio.errors import (
     FileTooLarge,
     TranscodeError,

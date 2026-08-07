@@ -18,17 +18,13 @@ from typing import Any
 
 import httpx
 
-from vibe_vox.adapters.base import Segment, TranscriptionResult
+from vibe_vox.adapters.base import (
+    AsrTimeout,
+    AsrUnavailable,
+    Segment,
+    TranscriptionResult,
+)
 from vibe_vox.adapters.zh import to_traditional
-
-
-class AsrUnavailable(Exception):
-    """遠端 ASR 連不上、回錯或回傳信封異常（端點層映射 → 502）。"""
-
-
-class AsrTimeout(Exception):
-    """遠端 ASR 呼叫逾時（端點層映射 → 504）。"""
-
 
 _SHOW_KEYS = "Start time, End time, Speaker ID, Content"
 
