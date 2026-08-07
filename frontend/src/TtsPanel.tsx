@@ -1,49 +1,42 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 
+import { useCollection } from "./collection";
 import { findBlockingService, type Health } from "./health";
-import { listTtsVoices, synthesizeSpeech, type TtsVoice } from "./tts";
+import { listTtsVoices, synthesizeSpeech } from "./tts";
 import { useObjectUrl } from "./useObjectUrl";
 
 export function TtsPanel({ health }: { health: Health | null }) {
-  const [voices, setVoices] = useState<TtsVoice[]>([]);
-  const [voiceId, setVoiceId] = useState("");
+  const { collection, errorMessage: voicesError } = useCollection(listTtsVoices);
+  const voices = collection.status === "ready" ? collection.items : [];
+  // 未選時落到第一個：選單只在 ready 態有選項，所以清單未回時它必然是空字串。
+  const [chosenId, setChosenId] = useState("");
+  const voiceId = chosenId || voices[0]?.id || "";
+
   const [text, setText] = useState("");
   const [instruct, setInstruct] = useState("");
   const [audioUrl, showAudio] = useObjectUrl();
-  const [error, setError] = useState<string | null>(null);
+  const [synthesisError, setSynthesisError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const blocking = findBlockingService("tts", health);
-
-  const load = useCallback(async () => {
-    try {
-      const got = await listTtsVoices();
-      setVoices(got);
-      setVoiceId((current) => current || got[0]?.id || "");
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "音色清單載入失敗");
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  // 合成錯誤不歸清單那個 hook 管，但兩者共用同一條訊息列。
+  const errorMessage = voicesError ?? synthesisError;
+  // 清單未回或取不到時一併停用：沒有可選音色的送出必然失敗。
+  const submitDisabled =
+    !text.trim() || loading || collection.status !== "ready" || blocking !== null;
 
   const submit = async () => {
     if (!text.trim() || !voiceId) return;
     setLoading(true);
-    setError(null);
+    setSynthesisError(null);
     try {
       showAudio(await synthesizeSpeech({ input: text, voice: voiceId, instruct }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "合成失敗");
+      setSynthesisError((err as Error).message);
     } finally {
       setLoading(false);
     }
   };
-
-  const noVoices = voices.length === 0;
 
   return (
     <section className="panel">
@@ -58,12 +51,17 @@ export function TtsPanel({ health }: { health: Health | null }) {
           {blocking.toUpperCase()} 服務尚未就緒，已停用送出以避免無效操作。
         </p>
       )}
-      {noVoices && (
+      {collection.status === "loading" && (
+        <p className="panel__note" role="status">
+          音色清單載入中…
+        </p>
+      )}
+      {collection.status === "empty" && (
         <p className="panel__warn">
           尚未建立任何音色，請先到「音色管理」建立一個。系統不附任何內建音色。
         </p>
       )}
-      {error && <p className="panel__warn">{error}</p>}
+      {errorMessage && <p className="panel__warn">{errorMessage}</p>}
 
       <div className="asr-form">
         <label className="hw-input" htmlFor="tts-voice">
@@ -72,7 +70,7 @@ export function TtsPanel({ health }: { health: Health | null }) {
             id="tts-voice"
             aria-label="音色"
             value={voiceId}
-            onChange={(e) => setVoiceId(e.target.value)}
+            onChange={(e) => setChosenId(e.target.value)}
           >
             {voices.map((v) => (
               <option key={v.id} value={v.id}>
@@ -109,7 +107,7 @@ export function TtsPanel({ health }: { health: Health | null }) {
           className="btn"
           type="button"
           onClick={() => void submit()}
-          disabled={!text.trim() || loading || noVoices || blocking !== null}
+          disabled={submitDisabled}
         >
           {loading ? "合成中…" : "送出合成"}
         </button>

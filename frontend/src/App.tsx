@@ -32,7 +32,8 @@ function useHealth(pollMs = 10000): HealthState {
         if (alive) {
           setState({
             status: "error",
-            message: err instanceof Error ? err.message : "未知錯誤",
+            // api.ts 只拋 Error，else 分支不可達；全前端統一用這個寫法。
+            message: (err as Error).message,
           });
         }
       }

@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
+import { useCollection } from "./collection";
 import {
   createHotword,
   deleteHotword,
@@ -13,41 +14,21 @@ import {
 } from "./hotwords";
 
 export function HotwordsPanel() {
-  const [hotwords, setHotwords] = useState<Hotword[]>([]);
   const [query, setQuery] = useState("");
   const [newTerm, setNewTerm] = useState("");
   const [newNote, setNewNote] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTerm, setEditTerm] = useState("");
   const [editNote, setEditNote] = useState("");
-  const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<ContextPreview | null>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importResult, setImportResult] = useState<string | null>(null);
 
-  const load = useCallback(async (q: string) => {
-    try {
-      setHotwords(await listHotwords(q || undefined));
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Hotword 載入失敗");
-    }
-  }, []);
-
-  useEffect(() => {
-    void load(query);
-  }, [query, load]);
-
-  // 變更後重新載入清單，並收斂錯誤呈現。
-  const run = async (action: () => Promise<unknown>) => {
-    try {
-      await action();
-      setError(null);
-      await load(query);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "操作失敗");
-    }
-  };
+  // 搜尋字串進依賴：query 一變就重新載入，且舊查詢的回應會在 cleanup 被丟棄。
+  const load = useCallback(() => listHotwords(query || undefined), [query]);
+  const { collection, errorMessage, run } = useCollection(load);
+  // 表頭常駐（版面不跳），故資料列另取；空清單與載入中各自是 tbody 內的一列。
+  const hotwords = collection.status === "ready" ? collection.items : [];
 
   const startEdit = (h: Hotword) => {
     setEditingId(h.id);
@@ -61,10 +42,14 @@ export function HotwordsPanel() {
       setEditingId(null);
     });
 
+  // 預覽不改動清單，帶 reload:false 省掉那次重抓。
   const handlePreview = () =>
-    void run(async () => {
-      setPreview(await previewContext());
-    });
+    void run(
+      async () => {
+        setPreview(await previewContext());
+      },
+      { reload: false },
+    );
 
   const handleImport = () => {
     if (!importFile) return;
@@ -82,7 +67,7 @@ export function HotwordsPanel() {
         維護辨識用詞彙清單；啟用中的 term 會於辨識時編譯成 Context prompt 注入 ASR。
       </p>
 
-      {error && <p className="panel__warn">{error}</p>}
+      {errorMessage && <p className="panel__warn">{errorMessage}</p>}
 
       <form
         className="hw-form"
@@ -233,7 +218,14 @@ export function HotwordsPanel() {
               </tr>
             );
           })}
-          {hotwords.length === 0 && (
+          {collection.status === "loading" && (
+            <tr>
+              <td className="hw-loading" colSpan={4}>
+                載入中…
+              </td>
+            </tr>
+          )}
+          {collection.status === "empty" && (
             <tr>
               <td className="hw-empty" colSpan={4}>
                 尚無 Hotword，於上方新增第一筆。

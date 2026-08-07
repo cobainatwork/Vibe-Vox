@@ -108,7 +108,7 @@ export function AsrPanel({ health }: { health: Health | null }) {
       setElapsedMs(performance.now() - start);
       setView("segments");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "辨識失敗");
+      setError((err as Error).message);
     } finally {
       setLoading(false);
     }

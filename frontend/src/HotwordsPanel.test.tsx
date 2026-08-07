@@ -31,6 +31,25 @@ describe("HotwordsPanel", () => {
     expect(await screen.findByText("台積電")).toBeInTheDocument();
   });
 
+  it("清單回來之前不宣稱沒有 Hotword", () => {
+    // 「還沒問到」與「問過了，沒有」是兩件事，不能共用同一個畫面。
+    mockedApi.listHotwords.mockReturnValue(new Promise(() => {}));
+
+    render(<HotwordsPanel />);
+
+    expect(screen.queryByText(/尚無 Hotword/)).not.toBeInTheDocument();
+    expect(screen.getByText(/載入中/)).toBeInTheDocument();
+  });
+
+  it("載入失敗時顯示訊息，且不宣稱沒有 Hotword", async () => {
+    mockedApi.listHotwords.mockRejectedValue(new Error("Hotword 請求失敗：HTTP 503"));
+
+    render(<HotwordsPanel />);
+
+    expect(await screen.findByText("Hotword 請求失敗：HTTP 503")).toBeInTheDocument();
+    expect(screen.queryByText(/尚無 Hotword/)).not.toBeInTheDocument();
+  });
+
   it("切換 enabled 以目標值呼叫 setHotwordEnabled", async () => {
     mockedApi.listHotwords.mockResolvedValue([hw({ enabled: true })]);
     mockedApi.setHotwordEnabled.mockResolvedValue(hw({ enabled: false }));

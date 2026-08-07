@@ -95,4 +95,23 @@ describe("TtsPanel", () => {
     expect(await screen.findByText(/尚未建立任何音色/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "送出合成" })).toBeDisabled();
   });
+
+  it("音色清單回來之前不宣稱沒有音色，但也不讓人送出", () => {
+    // 「還沒問到」時叫操作者去建立音色，是要他去修一個可能不存在的問題。
+    mockedApi.listTtsVoices.mockReturnValue(new Promise(() => {}));
+    render(<TtsPanel health={READY} />);
+
+    expect(screen.queryByText(/尚未建立任何音色/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "送出合成" })).toBeDisabled();
+    // 選單空、按鈕灰掉而畫面不說話，操作者只會以為壞了。
+    expect(screen.getByText(/音色清單載入中/)).toBeInTheDocument();
+  });
+
+  it("音色清單載入失敗時顯示訊息，且不宣稱沒有音色", async () => {
+    mockedApi.listTtsVoices.mockRejectedValue(new Error("音色清單載入失敗：HTTP 503"));
+    render(<TtsPanel health={READY} />);
+
+    expect(await screen.findByText("音色清單載入失敗：HTTP 503")).toBeInTheDocument();
+    expect(screen.queryByText(/尚未建立任何音色/)).not.toBeInTheDocument();
+  });
 });

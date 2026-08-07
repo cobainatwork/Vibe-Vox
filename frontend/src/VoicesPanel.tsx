@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 
+import { useCollection } from "./collection";
 import { synthesizeSpeech } from "./tts";
 import { useObjectUrl } from "./useObjectUrl";
 import {
@@ -22,8 +23,7 @@ const TYPE_LABEL: Record<Voice["type"], string> = {
 const PREVIEW_TEXT = "您好，我是您的專屬顧問，很高興為您服務。";
 
 export function VoicesPanel() {
-  const [voices, setVoices] = useState<Voice[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const { collection, errorMessage, run } = useCollection(listVoices);
 
   const [name, setName] = useState("");
   const [language, setLanguage] = useState("zh-TW");
@@ -36,29 +36,6 @@ export function VoicesPanel() {
   const [previewOf, setPreviewOf] = useState<string | null>(null);
   const [previewUrl, showPreview] = useObjectUrl();
 
-  const load = useCallback(async () => {
-    try {
-      setVoices(await listVoices());
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "音色載入失敗");
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const run = async (action: () => Promise<unknown>) => {
-    try {
-      await action();
-      setError(null);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "操作失敗");
-    }
-  };
-
   const submitClone = () => {
     // 參考音是 clone 音色的身分本體，沒有它建不出音色。
     if (!name.trim() || !refAudio) return;
@@ -70,19 +47,17 @@ export function VoicesPanel() {
     });
   };
 
-  // 不走 run()：那個會在成功後重抓清單，而試聽不改動任何資料。
+  // 帶 reload:false：試聽不改動任何資料，重抓清單只是多打一次後端。
   const preview = (v: Voice) =>
-    void (async () => {
-      try {
+    void run(
+      async () => {
         // 走消費端的合成端點而非另開一條試聽路徑：這裡聽到的必須就是 AI_practise 會
         // 拿到的東西，否則試聽正常而消費端壞掉時沒有人會發現。
         showPreview(await synthesizeSpeech({ input: PREVIEW_TEXT, voice: v.id }));
         setPreviewOf(v.id);
-        setError(null);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "試聽失敗");
-      }
-    })();
+      },
+      { reload: false },
+    );
 
   const saveRename = () =>
     void run(async () => {
@@ -97,7 +72,7 @@ export function VoicesPanel() {
         建立可重複使用的 TTS 音色。系統不附任何音色，全部由此建立；合成時一律以可控風格模式重播，故每個音色都支援 Instruction。Instruction 要寫發聲方式（音量、語速、句尾走向），寫情緒名稱沒有效果。
       </p>
 
-      {error && <p className="panel__warn">{error}</p>}
+      {errorMessage && <p className="panel__warn">{errorMessage}</p>}
 
       <form
         className="hw-form"
@@ -154,9 +129,15 @@ export function VoicesPanel() {
         </button>
       </form>
 
-      {voices.length === 0 ? (
+      {collection.status === "loading" && (
+        <p className="hw-loading" role="status">
+          載入中…
+        </p>
+      )}
+      {collection.status === "empty" && (
         <p className="hw-empty">尚未建立任何音色。上傳一段 5 至 30 秒的參考音即可建立第一個。</p>
-      ) : (
+      )}
+      {collection.status === "ready" && (
         <table className="hw-table">
           <thead>
             <tr>
@@ -167,7 +148,7 @@ export function VoicesPanel() {
             </tr>
           </thead>
           <tbody>
-            {voices.map((v) => (
+            {collection.items.map((v) => (
               <tr key={v.id}>
                 <td>
                   {renamingId === v.id ? (

@@ -60,6 +60,16 @@ describe("VoicesPanel", () => {
     expect(await screen.findByText(/尚未建立任何音色/)).toBeInTheDocument();
   });
 
+  it("清單回來之前不宣稱沒有音色", () => {
+    // 首次 render 就說「尚未建立任何音色」，是把「還沒問到」講成「問過了，沒有」。
+    mockedApi.listVoices.mockReturnValue(new Promise(() => {}));
+
+    render(<VoicesPanel />);
+
+    expect(screen.queryByText(/尚未建立任何音色/)).not.toBeInTheDocument();
+    expect(screen.getByText(/載入中/)).toBeInTheDocument();
+  });
+
   it("載入時列出音色", async () => {
     mockedApi.listVoices.mockResolvedValue([voice()]);
 
@@ -120,11 +130,13 @@ describe("VoicesPanel", () => {
     await waitFor(() => expect(mockedApi.renameVoice).toHaveBeenCalledWith("v1", "新名字"));
   });
 
-  it("後端錯誤時顯示訊息", async () => {
+  it("後端錯誤時顯示訊息，且不同時宣稱沒有音色", async () => {
     mockedApi.listVoices.mockRejectedValue(new Error("音色名稱「甲」已存在"));
 
     render(<VoicesPanel />);
 
     expect(await screen.findByText("音色名稱「甲」已存在")).toBeInTheDocument();
+    // 載入失敗代表不知道有沒有音色，不代表沒有。
+    expect(screen.queryByText(/尚未建立任何音色/)).not.toBeInTheDocument();
   });
 });

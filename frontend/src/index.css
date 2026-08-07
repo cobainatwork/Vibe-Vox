@@ -288,7 +288,9 @@ body {
   outline-offset: 2px;
 }
 
-.hw-empty {
+/* 表格位置的淡色提示。載入中與空清單長得一樣但講的是兩件事，各自有名字。 */
+.hw-empty,
+.hw-loading {
   padding: 24px 12px;
   color: var(--muted);
   text-align: center;
