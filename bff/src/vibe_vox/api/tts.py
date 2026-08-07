@@ -13,6 +13,7 @@ from vibe_vox.adapters.base import CONTRACT_SPEC, Utterance
 from vibe_vox.audio.reference import unusable_reason
 from vibe_vox.audio.wav import wrap_pcm
 from vibe_vox.persistence.voices import VoiceNotFound
+from vibe_vox.tts_g2p import lock_taiwan_readings
 from vibe_vox.tts_text import to_speakable
 from vibe_vox.tts_tn import to_spoken_form
 
@@ -172,7 +173,11 @@ def to_utterance(*, text: str, instruct: str | None, max_chars: int) -> Utteranc
     # 量的是中性化後的長度：被移除的字元不該算進額度（見 to_speakable）。
     if len(speakable) > max_chars:
         raise InputTooLong(len(speakable), max_chars)
-    return Utterance(text=to_spoken_form(speakable), instruct=instruct)
+    # 順序不可倒置：TN 會把 `{le4}` 的聲調數字展開成 `{le四}`（#46 D7 實測），故鎖讀音
+    # 必須在 TN 之後。
+    return Utterance(
+        text=lock_taiwan_readings(to_spoken_form(speakable)), instruct=instruct
+    )
 
 
 @router.post("/api/tts/speech", response_class=Response, openapi_extra=_OPENAPI_RESPONSES)

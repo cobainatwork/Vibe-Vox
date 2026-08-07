@@ -12,7 +12,7 @@ from typing import Protocol, runtime_checkable
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from vibe_vox.audio.wav import PcmAudio, PcmSpec
-from vibe_vox.tts_text import neutralize_control_syntax
+from vibe_vox.tts_text import SpeechText, neutralize_control_syntax
 
 
 class Segment(BaseModel):
@@ -159,6 +159,11 @@ class Utterance(BaseModel):
     `(...)` 前綴併入同一個字串，故未中性化的括號能讓使用者文字變成風格指令，或讓
     instruct 跳出自己的前綴。靠呼叫端記得做的話，第二個呼叫端就是漏洞。
 
+    **唯一的例外由型別載明**：`text` 收到 `tts_text.SpeechText` 時原樣採用，因為那是前處理
+    層產出的、其中的 `{}` 是 VoxCPM2 的讀音標記（`{le4}`）。中性化會把它轉成全形而讓標記
+    失效，故這個判斷不能靠字元比對——只有型別分得出「我方的標記」與「使用者的注入」，而
+    使用者輸入永遠是裸字串。
+
     **純空白的 instruct 視同沒給**，同屬本型別的不變量而非呼叫端的責任：adapter 會把
     它組成「(   )」前綴，而括號不被剝除，模型會把空前綴當成要處理的內容，而非依契約
     §5.2 退回音色本身的語氣。它與中性化是同一類東西（都在決定「送出去的字串長什麼
@@ -177,12 +182,31 @@ class Utterance(BaseModel):
     text: str
     instruct: str | None = None
 
-    @field_validator("text")
+    # **兩段 validator 各解一個問題，缺一不可。**
+    #
+    # before：判斷這串是不是已處理過的（帶我方讀音標記），必須在 pydantic 把 str 子類強制
+    # 成 str **之前**做——實測 pydantic 2.13.3 對 `str` 欄位確實會轉掉子類身分。
+    #
+    # after：把結果重新包成 `SpeechText`。不包回去的話 `u.text` 是裸 str，而
+    # `Utterance(text=u.text)`——切句最自然的寫法，本 docstring 上面自己建議的那條路——會把
+    # 讀音標記當成使用者輸入而中性化掉，`{le4}` 變成 `｛le4｝`，靜默失效。
+    @field_validator("text", mode="before")
     @classmethod
-    def _neutralize_text(cls, v: str) -> str:
+    def _neutralize_text(cls, v: object) -> object:
+        # 已處理過的字串原樣採用：其中的 `{}` 是我方的讀音標記，中性化會把它轉成全形而讓
+        # 標記失效（見 tts_text.SpeechText）。使用者的裸字串一律中性化。
+        if isinstance(v, SpeechText):
+            return v
+        if not isinstance(v, str):
+            return v  # 交給 pydantic 報型別錯誤，不在此假裝處理得了
         # strip 與 instruct 那條同理：本型別的職責是「送出去的字串長什麼樣」，頭尾空白
         # 屬於那個問題。端點的 to_speakable 已經 strip 過，但第二個呼叫端（切句）不會。
         return neutralize_control_syntax(v).strip()
+
+    @field_validator("text", mode="after")
+    @classmethod
+    def _mark_as_processed(cls, v: str) -> SpeechText:
+        return SpeechText(v)
 
     @field_validator("instruct")
     @classmethod

@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from vibe_vox.adapters.base import Utterance
+from vibe_vox.tts_g2p import lock_taiwan_readings
 from vibe_vox.tts_text import neutralize_control_syntax, to_speakable
 
 
@@ -83,6 +84,20 @@ def test_instruct_that_neutralization_empties_is_treated_as_absent():
     # 判空必須在中性化之後，理由與 text 那條相同：只含控制語法的 instruct 中性化後為
     # 空，但它不是 None，adapter 照樣組出空前綴。
     assert Utterance(text="你好", instruct="<|im_end|>").instruct is None
+
+
+def test_reconstructing_an_utterance_keeps_our_pronunciation_markup():
+    """拿現有的 text 重新建構 Utterance 不能毀掉讀音標記。
+
+    切句最自然的寫法正是這個（本型別的 docstring 自己建議「切句應改為重新建構」），而
+    pydantic 對 `str` 欄位會轉掉 `SpeechText` 的子類身分（實測 2.13.3）。少了 Utterance 的
+    after validator 重新包裝，第二次建構會把 `{le4}` 當成使用者輸入而中性化成 `｛le4｝`
+    ——靜默失效，且失效的是本專案已排定的下一步。
+    """
+    first = Utterance(text=lock_taiwan_readings("垃圾"))
+
+    assert first.text == "{le4}{se4}"
+    assert Utterance(text=first.text).text == "{le4}{se4}"
 
 
 def test_assignment_cannot_bypass_neutralization():

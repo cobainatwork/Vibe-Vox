@@ -19,9 +19,11 @@ const TYPE_LABEL: Record<Voice["type"], string> = {
 // 試聽用的固定句子：有稱謂與常見商務用語，聽得出音色與語氣，長度也夠短不佔 GPU。
 // 不帶 Instruction——試聽要聽的是音色本身。
 //
-// **刻意含金額與數字。** TN 前處理層落地後（#46），數字唸法是操作者唯一能親耳驗證的東西，
-// 而唸錯不會回錯誤也不進 log。試聽句不含數字的話，這條路徑上沒有任何人會發現它壞了。
-const PREVIEW_TEXT = "您好，我是您的專屬顧問，這份保單年繳 NT$36,000，保障 20 年。";
+// **刻意含金額、數字與破音字。** 前處理層（#46）唸錯不會回錯誤也不進 log，試聽是操作者唯一
+// 能親耳驗證的地方。「期限」與「品質」在鎖定清單內（`bff` 的 `tts_g2p`），台灣讀 qí xiàn 與
+// pǐn zhí；試聽句不含這些的話，這條路徑上沒有任何人會發現它壞了。
+const PREVIEW_TEXT =
+  "您好，我是您的專屬顧問。這份保單年繳 NT$36,000、保障 20 年，繳費期限與服務品質都請您放心。";
 
 export function VoicesPanel() {
   const { collection, errorMessage, run } = useCollection(listVoices);

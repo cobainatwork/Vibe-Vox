@@ -53,9 +53,12 @@ describe("VoicesPanel", () => {
     expect(mockedApi.listVoices).toHaveBeenCalledTimes(1);
   });
 
-  it("試聽句含數字，讓操作者聽得到數字唸法", async () => {
-    // TN 前處理層唸錯不會回錯誤也不進 log，試聽是操作者唯一能親耳驗證的地方。試聽句不含
-    // 數字的話，這條路徑上沒有任何人會發現它壞了。
+  it("試聽句含數字與破音字，讓操作者聽得到前處理的結果", async () => {
+    // 前處理層唸錯不會回錯誤也不進 log，試聽是操作者唯一能親耳驗證的地方。試聽句不含
+    // 這些的話，這條路徑上沒有任何人會發現它壞了。
+    //
+    // 「品質」是後端讀音鎖定清單內的詞（`tts_g2p`）。這是跨部署單元的弱耦合：後端把它
+    // 從清單移除時本測試不會變紅，但註解讓下一個人知道這個字為什麼在這裡。
     mockedApi.listVoices.mockResolvedValue([voice()]);
     mockedTts.synthesizeSpeech.mockResolvedValue(new Blob([new Uint8Array([1])]));
     URL.createObjectURL = vi.fn(() => "blob:fake");
@@ -67,6 +70,7 @@ describe("VoicesPanel", () => {
     await waitFor(() => expect(mockedTts.synthesizeSpeech).toHaveBeenCalled());
     const { input } = mockedTts.synthesizeSpeech.mock.calls[0][0];
     expect(input).toMatch(/\d/);
+    expect(input).toContain("品質");
   });
 
   it("標出參考音不可用的音色，並擋掉一定失敗的試聽", async () => {

@@ -419,6 +419,43 @@ def test_input_parentheses_cannot_become_a_style_instruction(tmp_path):
     assert "（笑）" in u.text
 
 
+def test_taiwan_readings_are_locked_on_the_way_to_the_model(tmp_path):
+    # VoxCPM2 沒有台灣國語的訓練目標，「垃圾」會唸成 lā jī。讀音標記是唯一的矯正通道
+    # （契約 §5.1）。這條與 test_tts_g2p.py 的差別是它走完整條端點路徑：中性化、TN、
+    # 鎖讀音三者的順序若錯了，標記會被中性化轉成全形而失效。
+    u = _sent_utterance(tmp_path, {"input": "我們把垃圾分類做得很好"})
+
+    assert u.text == "我們把{le4}{se4}分類做得很好"
+
+
+def test_a_realistic_sales_sentence_survives_both_preprocessing_layers(tmp_path):
+    # TN 與讀音鎖定的互動只有跨層的測試看得到：TN 會把 `{qi2}` 的聲調數字展開成 `{qi二}`，
+    # 故順序倒了整句的標記都會失效，而逐層的案例表看不出來。
+    u = _sent_utterance(
+        tmp_path,
+        {
+            "input": "定期壽險可以分期繳，繳費期限和品質都請您放心，"
+            "體檢的血液項目如果過期，我們會在 10/20 前重新安排。"
+        },
+    )
+
+    assert u.text == (
+        "定{qi2}壽險可以分{qi2}繳，繳費{qi2}限{han4}{pin3}{zhi2}都請您放心，"
+        "體檢的血{yi4}項目如果過{qi2}，我們會在十月二十日前重新安排。"
+    )
+
+
+def test_our_pronunciation_markup_survives_while_user_braces_do_not(tmp_path):
+    # **這是整條管線的安全不變量。** 大括號是讀音標記的語法：我方注入的必須原樣送出，
+    # 使用者打的必須被中性化。兩者在同一個字串裡共存，靠的是型別而不是字元比對——少了
+    # SpeechText，validator 只能一律轉全形而把我方的標記一起毀掉。
+    # 使用者括號內的 `3` 中性化後仍是一個普通數字，故 TN 照規則把它唸成三——那是對的，
+    # 它已經不是讀音標記的一部分了。
+    u = _sent_utterance(tmp_path, {"input": "垃圾{ni3}"})
+
+    assert u.text == "{le4}{se4}｛ni三｝"
+
+
 def test_input_braces_cannot_become_a_pronunciation_marker(tmp_path):
     # 大括號是讀音標記的保留語法（{le4}），同樣不能讓使用者文字注入。
     u = _sent_utterance(tmp_path, {"input": "設定{ni3}值"})

@@ -198,7 +198,12 @@ Vibe-Vox 是一個 ASR/TTS 後端服務，同時服務兩類消費者。**消費
 
 ## Further Notes
 
-- TTS 文字前處理層：任意台灣繁中送進 VoxCPM2 前需經 `raw 繁中 → 淨化 {} → TN → OpenCC s2tw → G2P（只鎖台陸差異字，輸出 {pinyin+聲調}）→ VoxCPM2(normalize=False)`，**順序不可倒置**——TN 會把 `{ni3}` 展開成 `{ni三}`，標記全毀。TN 用 `wetext`（Apache-2.0，已在 VoxCPM2 相依樹）加台灣規則補丁，G2P 用 `g2pw` 的發行模型（台灣注音）。該層放在 `TtsClient` 之上：純函式、無 I/O，放進 adapter 會使其無法在不接模型的情況下單測。細節見 `docs/superpowers/specs/2026-08-05-tts-text-frontend-tn-g2p.md`。
+- TTS 文字前處理層（#46 已落地）：任意台灣繁中送進模型前經 `中性化 {} → 判空與長度 → TN（口語展開）→ G2P（只鎖台陸差異字，輸出 {pinyin+聲調}）`，**順序不可倒置**——TN 會把 `{ni3}` 展開成 `{ni三}`，標記全毀。該層放在 `TtsClient` 之上：純函式、無 I/O、不載入模型，放進 adapter 會使其無法在不接模型的情況下單測。
+  - **TN 自寫規則，不用 `wetext`**：其編譯相依 `kaldifst` 只發到 cp312 wheel 而 BFF image 是 3.13，引入它等於把執行期鎖在舊版；且實測它在單位用詞、溫度語序、序數與年份讀法上都是大陸行為，而 OpenCC 只修字形修不了那些。
+  - **管線裡沒有 OpenCC s2tw 那一步了**：它原本是用來收 `wetext` 輸出的簡體字（两、点、摄），自寫的 TN 一開始就產出台灣用字，沒有要收的東西。ASR 側的 `adapters/zh.py` 不受影響。
+  - **G2P 出貨靜態表，不載入 g2pW 的類神經模型**：高價值的差異字多半在台灣是單音字或可逐詞鎖定，靜態表即可解決；模型只在開發期用來產表。這也讓 BFF 維持「不載入模型」（見上方架構段）。
+  - 讀音標記的 `{}` 與中性化的安全邊界相衝，以型別分辨（`tts_text.SpeechText`）：只有前處理層產得出帶標記的字串，使用者文字一律中性化。
+  - 選型依據見 `docs/superpowers/specs/2026-08-05-tts-text-frontend-tn-g2p.md`（研究）與 #46（實作決策與兩處推翻）。
 - 本地無 GPU 開發模式：測試用的 `AsrClient`／`TtsClient` stub 應同時可用於本地開發。提供 `docker-compose.dev.yml`（或等效設定）在無 48GB GPU 的工作機上以 stub adapter 啟動前端與 BFF，讓日常 UI／BFF 開發脫離高階 GPU 環境，降低 onboarding 摩擦。
 - 消費端遷移：Vibe-Vox 取代 AI_practise 現行 :8088（VibeVoice-ASR + CosyVoice）。`/api/tts/speech` 形狀不變，`/api/tts/voices` 的回應形狀改變，AI_practise 需一併調整；ASR 由 WebSocket 改 REST，需新增 REST 版 AsrProvider（現有 provider 可插拔設計支援）。兩 repo 皆由 Claude 協同開發，可一併處理。詳見 ADR-0003。
 - Instruction 範例需策展一份清單，對應 User Story 31。**範例一律以中文撰寫且寫聲學實現，不寫情緒名稱**：實測顯示只給情緒標籤（`生氣`、`不耐煩`）量不到變化也聽不出差異，給聲學描述（`語速很快、大聲吼`）則長度差 88%、音量差 55%，且中文效果強於英文。數據見 `docs/superpowers/specs/2026-08-05-voxcpm2-style-control-measured.md`。
