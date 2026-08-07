@@ -2,11 +2,14 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as api from "./tts";
+import * as preview from "./spokenForm";
 import { TtsPanel } from "./TtsPanel";
 import type { Health } from "./health";
 
 vi.mock("./tts");
+vi.mock("./spokenForm");
 const mockedApi = vi.mocked(api);
+const mockedPreview = vi.mocked(preview);
 
 const READY: Health = { asr: { ready: true }, tts: { ready: true } };
 const TTS_DOWN: Health = { asr: { ready: true }, tts: { ready: false } };
@@ -36,6 +39,31 @@ async function fillAndSubmit(text = "您好，我想了解一下這張保單。"
 }
 
 describe("TtsPanel", () => {
+  it("合成後顯示實際送進模型的文字", async () => {
+    // 唸錯不會回錯誤也不進 log。把前處理後的字串攤出來，操作者才分得出是前處理錯了還是
+    // 模型錯了。
+    mockedApi.synthesizeSpeech.mockResolvedValue(new Blob([new Uint8Array([1])]));
+    mockedPreview.previewSpokenForm.mockResolvedValue("重量三公斤");
+    render(<TtsPanel health={READY} />);
+
+    await fillAndSubmit("重量 3kg");
+
+    expect(await screen.findByText("重量三公斤")).toBeInTheDocument();
+  });
+
+  it("預覽失敗不影響合成結果", async () => {
+    // 預覽是診斷用的附加資訊。前端與 BFF 是兩個部署單元，image 落後時這個端點根本不存在
+    // ——讓它擋住合成等於用一個診斷功能換掉主功能。
+    mockedApi.synthesizeSpeech.mockResolvedValue(new Blob([new Uint8Array([1])]));
+    mockedPreview.previewSpokenForm.mockRejectedValue(new Error("HTTP 404"));
+    render(<TtsPanel health={READY} />);
+
+    await fillAndSubmit();
+
+    expect(await screen.findByLabelText("合成結果")).toBeInTheDocument();
+    expect(screen.queryByText(/HTTP 404/)).not.toBeInTheDocument();
+  });
+
   it("合成後提供可播放與可下載的音訊", async () => {
     mockedApi.synthesizeSpeech.mockResolvedValue(
       new Blob([new Uint8Array([1])], { type: "audio/wav" }),

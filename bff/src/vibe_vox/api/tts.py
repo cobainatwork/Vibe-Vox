@@ -14,6 +14,7 @@ from vibe_vox.audio.reference import unusable_reason
 from vibe_vox.audio.wav import wrap_pcm
 from vibe_vox.persistence.voices import VoiceNotFound
 from vibe_vox.tts_text import to_speakable
+from vibe_vox.tts_tn import to_spoken_form
 
 router = APIRouter()
 
@@ -148,22 +149,30 @@ def _reject_unsupported_options(body: SpeechRequest, *, model_name: str) -> None
         raise UnsupportedResponseFormat(body.response_format)
 
 
-def _to_utterance(body: SpeechRequest, *, max_chars: int) -> Utterance:
+def to_utterance(*, text: str, instruct: str | None, max_chars: int) -> Utterance:
     """把請求的文字欄位清洗成一句可合成的內容。
+
+    收欄位而非收 `SpeechRequest`：管理平面的預覽端點沒有 `voice` 可給（見
+    api/admin_tts.py），而它必須走這同一個函式，否則預覽與合成會各自組出一份字串。
 
     一次請求只承載一種語氣（契約 §5.2），故整段共用同一個 instruct；切句尚未實作。
 
     本層只做「文字層的事實 → HTTP 狀態碼」的映射。中性化、判空與 instruct 的正規化
     都不在此：前兩者由 `to_speakable` 一併完成（分開就會量錯順序），後者是 Utterance
     自己的不變量（見 adapters/base.py）。
+
+    **長度上限量在展開之前。** 上限是「語音長度」的代理值（用途是擋整篇文章佔住 GPU），
+    而 TN 不改變語音長度——`NT$1,250` 與「新臺幣一千二百五十元」唸起來一樣長，字元數卻
+    從 8 變成 10。量在展開後的話，消費端會為一個它算得出來是合法的長度收到 413，而它
+    無法預測展開會膨脹多少（契約 §5.1）。
     """
-    text = to_speakable(body.input)
-    if text is None:
+    speakable = to_speakable(text)
+    if speakable is None:
         raise EmptyInput()
     # 量的是中性化後的長度：被移除的字元不該算進額度（見 to_speakable）。
-    if len(text) > max_chars:
-        raise InputTooLong(len(text), max_chars)
-    return Utterance(text=text, instruct=body.instruct)
+    if len(speakable) > max_chars:
+        raise InputTooLong(len(speakable), max_chars)
+    return Utterance(text=to_spoken_form(speakable), instruct=instruct)
 
 
 @router.post("/api/tts/speech", response_class=Response, openapi_extra=_OPENAPI_RESPONSES)
@@ -189,7 +198,11 @@ async def synthesize_speech(body: SpeechRequest, request: Request) -> Response:
     reason = await unusable_reason(reference_audio)
     if reason is not None:
         raise VoiceUnusable(body.voice, reason)
-    utterance = _to_utterance(body, max_chars=settings.tts_max_input_chars)
+    utterance = to_utterance(
+        text=body.input,
+        instruct=body.instruct,
+        max_chars=settings.tts_max_input_chars,
+    )
 
     # 只有合成進 guard：查音色與驗欄位相對合成是輕量的，佔一個併發額度沒有意義。**上面
     # 的可用性檢查是個例外**——非 wav 的參考音會在 guard 之外起一個 ffprobe 子進程，故

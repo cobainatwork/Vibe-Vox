@@ -17,10 +17,11 @@ const TYPE_LABEL: Record<Voice["type"], string> = {
 };
 
 // 試聽用的固定句子：有稱謂與常見商務用語，聽得出音色與語氣，長度也夠短不佔 GPU。
-// 刻意不含數字——數字唸法要等 TN 前處理層做出來才正確（見 docs/api/tts.md §5.1），
-// 現在放數字只會讓操作者聽到錯的唸法而以為是音色壞了。
 // 不帶 Instruction——試聽要聽的是音色本身。
-const PREVIEW_TEXT = "您好，我是您的專屬顧問，很高興為您服務。";
+//
+// **刻意含金額與數字。** TN 前處理層落地後（#46），數字唸法是操作者唯一能親耳驗證的東西，
+// 而唸錯不會回錯誤也不進 log。試聽句不含數字的話，這條路徑上沒有任何人會發現它壞了。
+const PREVIEW_TEXT = "您好，我是您的專屬顧問，這份保單年繳 NT$36,000，保障 20 年。";
 
 export function VoicesPanel() {
   const { collection, errorMessage, run } = useCollection(listVoices);

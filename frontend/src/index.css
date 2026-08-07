@@ -297,6 +297,17 @@ body {
   text-decoration: none;
 }
 
+/* 前處理後實際送進模型的文字。診斷資訊，不搶播放器的視覺重量。 */
+.tts-spoken {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.tts-spoken span {
+  color: var(--text);
+}
+
 /* 該列自己的警示。獨立成行而非接在名稱後面：原因是一整句話，接在名稱後會把欄寬撐開。 */
 .hw-row-warn {
   display: block;

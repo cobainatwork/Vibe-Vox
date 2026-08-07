@@ -53,6 +53,22 @@ describe("VoicesPanel", () => {
     expect(mockedApi.listVoices).toHaveBeenCalledTimes(1);
   });
 
+  it("試聽句含數字，讓操作者聽得到數字唸法", async () => {
+    // TN 前處理層唸錯不會回錯誤也不進 log，試聽是操作者唯一能親耳驗證的地方。試聽句不含
+    // 數字的話，這條路徑上沒有任何人會發現它壞了。
+    mockedApi.listVoices.mockResolvedValue([voice()]);
+    mockedTts.synthesizeSpeech.mockResolvedValue(new Blob([new Uint8Array([1])]));
+    URL.createObjectURL = vi.fn(() => "blob:fake");
+    URL.revokeObjectURL = vi.fn();
+
+    render(<VoicesPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "試聽" }));
+
+    await waitFor(() => expect(mockedTts.synthesizeSpeech).toHaveBeenCalled());
+    const { input } = mockedTts.synthesizeSpeech.mock.calls[0][0];
+    expect(input).toMatch(/\d/);
+  });
+
   it("標出參考音不可用的音色，並擋掉一定失敗的試聽", async () => {
     // 建立時的驗證只對新音色生效。既有音色可能超界或參考音已遺失，而清單是操作者唯一
     // 看得到音色的地方——不標的話他只會看到試聽失敗，而錯誤訊息長得像整個面板壞了。

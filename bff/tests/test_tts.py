@@ -354,6 +354,62 @@ def _sent_utterance(tmp_path, body: dict):
     return stub.last_utterances[0]
 
 
+def test_spoken_form_preview_equals_what_synthesis_sends(tmp_path):
+    """管理平面的預覽必須與合成實際送出的字串逐字相同。
+
+    這是預覽這個功能的全部價值：操作者聽到唸錯時要能分辨是前處理錯了還是模型錯了。兩者
+    各走一條路的話，預覽會變成第二個真相——它說對的時候合成仍然可能是錯的，而那比沒有
+    預覽更糟。
+    """
+    stub = StubTtsClient()
+    client = _client_with(tmp_path, stub)
+    voice = _create_voice(client)
+    text = "重量 3kg，總價 NT$1,250，2026/8/5 交貨"
+
+    preview = client.post("/api/admin/tts/spoken-form", json={"input": text})
+    assert preview.status_code == 200
+
+    assert client.post(
+        "/api/tts/speech", json={"input": text, "voice": voice["id"]}
+    ).status_code == 200
+
+    assert preview.json()["data"]["spoken"] == stub.last_utterances[0].text
+
+
+def test_spoken_form_preview_rejects_empty_input_like_synthesis_does(tmp_path):
+    # 預覽要回答「合成會拿到什麼」，而這種輸入的答案是「它不會合成」。回一個空字串會讓
+    # 操作者以為前處理把內容吃掉了。
+    client = _client(tmp_path)
+
+    resp = client.post("/api/admin/tts/spoken-form", json={"input": "<|im_end|>"})
+
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "EMPTY_INPUT"
+
+
+def test_input_reaches_the_model_in_taiwan_spoken_form(tmp_path):
+    # 契約 §7 逐字承諾了這件事（`3kg` → 三公斤、`NT$1,250` → 新臺幣一千二百五十元），而在
+    # 此之前沒有實作。**這條測的是實際交給 adapter 的字串**，不是 HTTP 200——唸錯不會回
+    # 錯誤碼、不進 log，消費端拿到的是 200 與一段合法音訊，所以這裡是唯一的偵測手段。
+    u = _sent_utterance(tmp_path, {"input": "重量 3kg，總價 NT$1,250"})
+
+    assert u.text == "重量三公斤，總價新臺幣一千二百五十元"
+
+
+def test_length_limit_is_measured_before_expansion_not_after(tmp_path):
+    # 上限是「語音長度」的代理值，而展開不改變語音長度——`NT$1,250` 與「新臺幣一千二百五十
+    # 元」唸起來一樣長，但字元數從 8 變成 10。量在展開後的話，消費端會為一個它算得出來是
+    # 合法的長度收到 413，而且它無法預測展開會膨脹多少。
+    client = _client_with(tmp_path, StubTtsClient(), tts_max_input_chars=9)
+    voice = _create_voice(client)
+
+    resp = client.post(
+        "/api/tts/speech", json={"input": "NT$1,250", "voice": voice["id"]}
+    )
+
+    assert resp.status_code == 200
+
+
 def test_input_parentheses_cannot_become_a_style_instruction(tmp_path):
     # 風格指令的語法就是行內半形括號，故使用者文字裡的 (笑) 若原樣通過就會變成指令。
     # 轉全形而非刪除：內容保留，控制語意消失（契約 §5.1）。

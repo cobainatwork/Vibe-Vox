@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import { useCollection } from "./collection";
 import { findBlockingService, type Health } from "./health";
+import { previewSpokenForm } from "./spokenForm";
 import { listTtsVoices, synthesizeSpeech } from "./tts";
 import { useObjectUrl } from "./useObjectUrl";
 
@@ -15,6 +16,7 @@ export function TtsPanel({ health }: { health: Health | null }) {
   const [text, setText] = useState("");
   const [instruct, setInstruct] = useState("");
   const [audioUrl, showAudio] = useObjectUrl();
+  const [spoken, setSpoken] = useState<string | null>(null);
   const [synthesisError, setSynthesisError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -29,8 +31,13 @@ export function TtsPanel({ health }: { health: Health | null }) {
     if (!text.trim() || !voiceId) return;
     setLoading(true);
     setSynthesisError(null);
+    setSpoken(null);
     try {
       showAudio(await synthesizeSpeech({ input: text, voice: voiceId, instruct }));
+      // 前處理後的文字是診斷用的附加資訊，**在合成之後取且失敗不上報**：前端與 BFF 是
+      // 兩個部署單元，image 落後時這個端點根本不存在，讓它擋住合成等於用一個診斷功能
+      // 換掉主功能。
+      setSpoken(await previewSpokenForm(text, instruct).catch(() => null));
     } catch (err) {
       setSynthesisError((err as Error).message);
     } finally {
@@ -117,6 +124,13 @@ export function TtsPanel({ health }: { health: Health | null }) {
         <div className="asr-result">
           {/* 沒有字幕軌可給：這是剛合成出來的語音，來源文字就在上面的輸入框裡。 */}
           <audio aria-label="合成結果" controls src={audioUrl} />
+          {/* 唸錯時要能分辨是前處理錯了還是模型錯了。取不到就不顯示——寧可少一段診斷
+              資訊，也不要在這裡放一則看起來像合成失敗的錯誤。 */}
+          {spoken && (
+            <p className="tts-spoken">
+              送進模型的文字：<span>{spoken}</span>
+            </p>
+          )}
           <div className="asr-actions">
             <a className="hw-link" href={audioUrl} download="speech.wav">
               下載 wav

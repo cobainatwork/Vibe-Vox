@@ -26,6 +26,7 @@ from vibe_vox.adapters.stub import (
 from vibe_vox.adapters.vllm_asr import VllmAsrClient
 from vibe_vox.adapters.vllm_omni_tts import VllmOmniTtsClient
 from vibe_vox.api.admin_hotwords import router as admin_hotwords_router
+from vibe_vox.api.admin_tts import router as admin_tts_router
 from vibe_vox.api.admin_voices import InvalidVoiceName, router as admin_voices_router
 from vibe_vox.api.asr import InvalidExtraTerms, router as asr_router
 from vibe_vox.api.health import router as health_router
@@ -364,4 +365,5 @@ def create_app(
     app.include_router(asr_router)
     app.include_router(tts_router)
     app.include_router(admin_voices_router)
+    app.include_router(admin_tts_router)
     return app
