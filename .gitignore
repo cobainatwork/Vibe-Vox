@@ -24,7 +24,7 @@
 # 若某份結果要留存為校準資料（#32），請放 docs/ 並註明音檔來源與量測條件。
 asr-result.json
 
-# HANDOFF.md §1 指示部署前以 export 端點備份 Hotword，這是那些備份檔。
+# 部署前以 export 端點備份 Hotword（見 docs/deployment.md §2），這是那些備份檔。
 # 內容是操作者維護的詞彙清單，屬環境資料而非原始碼。
 hotwords-backup.*
 

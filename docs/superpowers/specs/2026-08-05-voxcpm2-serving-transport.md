@@ -72,13 +72,13 @@ issue #3090：`OmniGenerationScheduler` 在 stateful streaming vocoder 的 final
 **3.1.7 現行 `voxcpm2.yaml` 的預設值在本機上一定起不來，兩個記憶體參數都得改。**〔primary + 本機實測值〕
 yaml 預設：`gpu_memory_utilization: 0.9`、`kv_cache_memory_bytes: 6442450944`（6 GiB）、`max_num_seqs: 8`、`max_model_len: 4096`、`enforce_eager: true`、`enable_prefix_caching: false`。yaml 註解自述這組值「Keeps peak ~13 GiB on any card」。recipe 的 4090 實測是另一組較舊的值（`max_num_seqs: 4`、KV ~15.2 GiB、resident ~22 GiB / 24 GiB），與現行 yaml 已不一致，**recipe 的記憶體數字不可拿來規劃本機容量**。
 
-本機已量到的（`HANDOFF.md` §8.2，2026-08-05，帶 `gpu_uuid` 且 vLLM 完全啟動後）：vLLM ASR 33654 MiB、aligner 3620 MiB；GPU 0 總量 46068 MiB（`nvidia-smi`）／45465 MiB（torch）。
+本機已量到的（#31，2026-08-05，帶 `gpu_uuid` 且 vLLM 完全啟動後）：vLLM ASR 33654 MiB、aligner 3620 MiB；GPU 0 總量 46068 MiB（`nvidia-smi`）／45465 MiB（torch）。
 
 由 §3.1.6 的 gate 直接得出兩條硬性要求（推論，算式明列）：
 - `gpu_memory_utilization` 必須 ≤ 啟動當下的 `free/total`。以 torch 的 45465 MiB 為分母、ASR 與 aligner 已在位為前提，該比值約 0.18，**遠低於 yaml 的 0.9**。
 - `kv_cache_memory_bytes` 的 6 GiB 加上權重 ~4.9 GiB 與 talker 緩衝 ~2 GiB 已超過剩餘空間，必須下調。
 
-**但餘裕的精確值算不出來，也不該算。** `HANDOFF.md` §8.2 已明記三個理由：VoxCPM2 的 ~8192 MiB 是估算而非實測、aligner 的佔用會隨 PyTorch caching allocator 長高且穩態上限未知、GPU 0 的總量本身有 46068 與 45465 兩個值而其 603 MiB 差距已大於任何算得出來的餘裕。本文遵守該結論：**不給餘裕數字，只給「哪兩個旋鈕要動」與「要量什麼」**（見 §6）。
+**但餘裕的精確值算不出來，也不該算。** 三個理由（記於 #31）：VoxCPM2 的 ~8192 MiB 是估算而非實測、aligner 的佔用會隨 PyTorch caching allocator 長高且穩態上限未知、GPU 0 的總量本身有 46068 與 45465 兩個值而其 603 MiB 差距已大於任何算得出來的餘裕。本文遵守該結論：**不給餘裕數字，只給「哪兩個旋鈕要動」與「要量什麼」**（見 §6）。
 
 **3.1.8 記憶體不是選型的判別依據。**〔推論，基於上列 primary 數字〕
 選項 A 是官方模型卡的 ~8 GB 估算、無上限機制、不夠就在推論期 OOM；選項 B 是 ~4.9 GiB 權重 + ~2 GiB 緩衝 + 顯式上限的 KV，且不夠就在啟動期明確拒絕。兩者都落在同一個「約 8 GiB 剩餘空間」的邊界上，差別在 B 的消耗可被明文封頂、失敗發生在啟動而非服務中。#14 既有 comment 稱原生進程「餘裕大、記憶體預算單邊即可」在對照實際數字後不成立。
@@ -190,7 +190,7 @@ ADR-0001 現行三句話裡有兩句要改：
 
 - 「Qwen3-TTS 由獨立服務程序提供」→ 引擎改 VoxCPM2，且**傳輸改為 vLLM-Omni 的 OpenAI 相容端點**。「解耦模型服務」的核心決策（模型不內嵌 BFF、各能力獨立服務、FastAPI 只做編排）**仍然成立且應保留**。
 - Consequences 第一句「TTS 的 clone/design/instruct 走原生 `qwen-tts` API 或非標準擴充端點（`/v1/audio/speech` 標準欄位不足）」→ 要改寫為：走 vLLM-Omni 的 `/v1/audio/speech`；參考音經非標準擴充欄位 `ref_audio`／`ref_text`；風格不經任何欄位而是行內 `(...)`；`instructions` 與 `task_type` 對 VoxCPM2 無效。
-- Consequences 第二句「必須壓低 vLLM 的 `gpu_memory_utilization`（約 0.55–0.6）替 TTS 留出 VRAM」→ **這句在事實與機制上都要重寫**。事實面：`HANDOFF.md` §8.3 已記該假設長期未被實作（實際跑上游預設 0.8，2026-08-05 才顯式設為 0.70），且現況是兩張卡、第二張被別的專案動態佔用。機制面：見 §3.1.6，`gpu_memory_utilization` 是 per-instance 上限而非全卡瓜分，第二個 vLLM 實例的約束是「啟動當下的 free memory ≥ total × 自己的 utilization」，而 KV 尺寸應以 `kv_cache_memory_bytes` 顯式封頂。新 ADR 應記的是「三個服務、每個各自的記憶體旋鈕與實測值」，而不是「壓低一個比例替另一個留空間」。
+- Consequences 第二句「必須壓低 vLLM 的 `gpu_memory_utilization`（約 0.55–0.6）替 TTS 留出 VRAM」→ **這句在事實與機制上都要重寫**。事實面：該假設長期未被實作（記於 #31）（實際跑上游預設 0.8，2026-08-05 才顯式設為 0.70），且現況是兩張卡、第二張被別的專案動態佔用。機制面：見 §3.1.6，`gpu_memory_utilization` 是 per-instance 上限而非全卡瓜分，第二個 vLLM 實例的約束是「啟動當下的 free memory ≥ total × 自己的 utilization」，而 KV 尺寸應以 `kv_cache_memory_bytes` 顯式封頂。新 ADR 應記的是「三個服務、每個各自的記憶體旋鈕與實測值」，而不是「壓低一個比例替另一個留空間」。
 
 新 ADR 還應納入 ADR-0001 的 Considered Options 裡那條「純用現成 OpenAI-Compatible server、不做自己的後端」的**部分翻案**：它被否決的理由（標準 schema 承載不了 Hotwords／音色 CRUD／持久化）依然對，所以 BFF 仍要存在；但 TTS 這一段的推論（`/v1/audio/speech` 欄位不足所以要自寫服務）已被 vLLM-Omni 的擴充欄位推翻。
 
@@ -206,7 +206,7 @@ ADR-0001 現行三句話裡有兩句要改：
 
 - vLLM-Omni 的上傳音色預設落在 `~/.cache/vllm-omni/speakers`（`SPEAKER_SAMPLES_DIR`，上限 `SPEAKER_MAX_UPLOADED=1000`）。若採上傳路徑，該目錄需要 persistent volume，否則容器重建就掉音色。
 - 若採預運算路徑，`custom_voice_dir` 指向的目錄要 mount 進去，且該目錄由離線腳本產生（腳本本身需要 GPU 與 `voxcpm` 套件）。
-- 現行 compose 把三個 GPU 服務全釘在 `device_ids: ["0"]`（`HANDOFF.md` §7），TTS 進來是第四個；GPU 1 被非 Vibe-Vox 的 gpustack 工作負載動態佔著，其餘裕不可假設穩定。
+- 現行 compose 把三個 GPU 服務全釘在 `device_ids: ["0"]`（見 `docs/deployment.md` §1），TTS 進來是第四個；GPU 1 被非 Vibe-Vox 的 gpustack 工作負載動態佔著，其餘裕不可假設穩定。
 
 ---
 
@@ -262,7 +262,7 @@ vllm-project/vllm：
 
 ### primary（本專案內部實測值）
 
-- `HANDOFF.md` §2.2／§2.4／§8.2／§8.3（vLLM 33654 MiB、aligner 3620 MiB、GPU 0 總量 46068／45465 MiB、以及「TTS 裝不裝得下現在算不出來」的三個理由）
+- #31（vLLM 33654 MiB、aligner 3620 MiB、GPU 0 總量 46068／45465 MiB、以及「TTS 裝不裝得下現在算不出來」的三個理由）。**原引用指向 `HANDOFF.md` 的章節，該檔已於 2026-08-08 刪除**——那正是「可變動的檔案被按章節號引用」的必然結果，量測數字自此一律記在 issue。
 - `docs/adr/0001-decoupled-model-serving.md`、`docs/adr/0002-design-voice-pinned-on-create.md`、`docs/adr/0003-rest-consumer-contract.md`、`CONTEXT.md`、`docs/spec.md`、`bff/src/vibe_vox/adapters/{base.py,stub.py}`
 
 ### community
