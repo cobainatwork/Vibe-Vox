@@ -6,7 +6,17 @@
 
 ## 1. 遠端機
 
-**`http://10.2.66.102:8088`，只開 HTTP 8088，無 shell 存取。** 路徑 `/api/` 由 nginx 反向代理至 BFF。
+**`http://10.2.66.102:8088`**，路徑 `/api/` 由 nginx 反向代理至 BFF。對外只開這一個 HTTP 埠，模型服務的埠**不**對外。
+
+**有 SSH。** `~/.ssh/config` 的 `qwen-gpu` 別名（`User root`，金鑰 `qwen_gpu_id_ed25519`），repo 在 `/opt/Vibe-Vox`，主機名 `vm-02-ubuntu24`。本檔曾寫「無 shell 存取」，那是錯的，且代價具體：#46 的 D7 因此改用「讀 vllm-omni 原始碼」代替規格指定的實機量測，而部署跑的是另一個版本，結論只能附帶 caveat 交付。**要在容器內量測時，用它。**
+
+```
+ssh qwen-gpu 'docker exec -i vibe-vox-bff-1 python -' <<'PY'
+...
+PY
+```
+
+這條路徑能到模型服務（`http://tts:8000`、`http://vllm:8000`），nginx 8088 到不了。腳本經 stdin 送進容器的 python，中文用不用 escape 都可以，但**別讓腳本經過本機 PowerShell 的雙引號**（`$` 會被吃掉）。
 
 機器有兩張卡。**GPU 1 被非本專案的 gpustack 工作負載動態佔用，其餘裕不可假設穩定**，故 GPU 服務全釘在 `device_ids: ["0"]`。
 

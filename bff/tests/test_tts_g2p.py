@@ -71,6 +71,68 @@ def test_the_conjunction_he_is_read_han_but_the_word_uses_are_not(raw, locked):
 
 
 @pytest.mark.parametrize(
+    ("raw", "locked"),
+    [
+        # 傾倒義在台灣唸 dào，而模型預設是 dǎo（操作者實際聽到的錯音就是「倒垃圾」）。
+        ("你要去倒垃圾", "你要去{dao4}{le4}{se4}"),
+        ("幫我倒杯水", "幫我{dao4}杯水"),
+        ("先倒杯茶給客戶", "先{dao4}杯茶給客戶"),
+    ],
+)
+def test_the_pouring_dao_is_locked(raw, locked):
+    # 讀音取自教育部辭典的語義區分，不是 g2pW 表的字級首選——那份表對兩讀都活的字幫不上。
+    assert lock_taiwan_readings(raw) == locked
+
+
+@pytest.mark.parametrize(
+    "untouched",
+    [
+        # **這一組是 `倒` 這條規則的安全網，每一句都是審查實測出來的誤鎖。**
+        #
+        # 第一版用「後接字白名單加前接動詞排除」，這些句子全部被鎖成 dào。根因是「跌倒義的
+        # 前接動詞」是開放集合（撲醉暈栽癱嚇病累撞滑吹…），封閉列舉蓋不住，故改為詞級。
+        "他撲倒水裡",
+        "他醉倒車上",
+        "她暈倒車廂裡",
+        "他栽倒水溝",
+        "他撞倒車庫的門",
+        "客戶滑倒水溝裡",
+        "颱風把樹吹倒油行門口",
+        # 連兩字詞都不能收：這兩句是自然句，`倒車`／`倒數` 進清單就會誤鎖。
+        "他跌倒車上",
+        "他跌倒數次",
+        # 跌倒義的一般用法。
+        "公司倒閉了",
+        "他不小心跌倒了",
+        "顛倒是非",
+        "壓倒性的優勢",
+        # **刻意漏鎖**：唸成 dǎo 是保留模型預設，而收 `倒水` 會誤鎖上面那幾句。
+        "麻煩你倒水",
+    ],
+)
+def test_the_falling_dao_is_never_locked(untouched):
+    # 誤鎖是我方新增的錯音，漏鎖只是保留模型預設。這個不對稱優先於涵蓋率。
+    assert lock_taiwan_readings(untouched) == untouched
+
+
+def test_the_pouring_dao_is_missed_when_the_word_order_changes():
+    """操作者抱怨的那個動詞換個語序就漏鎖，這是「寧可漏鎖」的實際代價而不是 bug。
+
+    `垃圾` 仍被 char 級規則鎖住，只有 `倒` 回退到模型預設——半句對半句是原狀，而不是
+    半句對半句錯。
+    """
+    assert lock_taiwan_readings("把垃圾倒掉") == "把{le4}{se4}倒掉"
+
+
+def test_the_pouring_dao_is_judged_before_the_main_table_rewrites_its_context():
+    """`倒` 的判準是它後面接什麼詞，而主表會把 `垃圾` 換成標記讓那個判準看不到字。
+
+    順序倒置的症狀很窄也很難看：只有「倒垃圾」這一種搭配會唸成 dǎo lè sè，半句對半句錯。
+    """
+    assert lock_taiwan_readings("倒垃圾") == "{dao4}{le4}{se4}"
+
+
+@pytest.mark.parametrize(
     "untouched",
     [
         # **這一組是這個模組的安全網。** 鎖錯比不鎖更糟：唸錯一個本來就對的詞，是我方
@@ -109,7 +171,12 @@ def test_every_table_entry_is_internally_consistent():
     音節數與詞長不符會讓那個詞少唸或多唸一個音；讀音格式錯了（少聲調、大寫、注音沒轉成
     拼音）模型不會報錯，只會照字面唸出來。兩者都聽得出來但都不會有任何錯誤訊號。
     """
-    from vibe_vox.tts_g2p import _CHAR_READINGS, _NOT_LOCKED, _WORD_READINGS
+    from vibe_vox.tts_g2p import (
+        _CHAR_READINGS,
+        _NOT_LOCKED,
+        _POUR_DAO_WORDS,
+        _WORD_READINGS,
+    )
 
     for word, readings in _WORD_READINGS.items():
         assert len(readings) == len(word), f"{word} 的音節數與字數不符"
@@ -126,3 +193,9 @@ def test_every_table_entry_is_internally_consistent():
     # 每個排除詞都必須真的包含一個詞條，否則它擋不到任何東西，只是一筆看起來有用的資料。
     for phrase in _NOT_LOCKED:
         assert any(w in phrase for w in _WORD_READINGS), f"{phrase} 沒有蓋住任何詞條"
+
+    # `倒` 的清單寫成完整的詞供人核對，但比對時只吃 `倒` 本身、後綴當成 lookahead。不以
+    # `倒` 起頭的詞會產出錯誤的 lookahead，而那是執行期靜默的。
+    for word in _POUR_DAO_WORDS:
+        assert word.startswith("倒"), f"{word} 不以「倒」起頭，lookahead 會切錯"
+        assert len(word) >= 3, f"{word} 只有兩個字，兩字詞已實測會跨詞界誤鎖"

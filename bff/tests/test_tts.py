@@ -428,6 +428,15 @@ def test_taiwan_readings_are_locked_on_the_way_to_the_model(tmp_path):
     assert u.text == "我們把{le4}{se4}分類做得很好"
 
 
+def test_the_reading_the_operator_reported_is_fixed_end_to_end(tmp_path):
+    # 操作者 2026-08-08 聽到「倒垃圾」被唸成 dǎo。這條守的是那個回報本身：`倒` 的判準是
+    # 它後面接什麼詞，而主表會把 `垃圾` 換成標記——三趟的順序若倒了，判準就看不到字。
+    # 同一句還帶 TN，因為 `{dao4}` 的聲調數字若被 TN 展開成 `{dao四}` 標記就失效。
+    u = _sent_utterance(tmp_path, {"input": "倒垃圾的桶子有 3kg"})
+
+    assert u.text == "{dao4}{le4}{se4}的桶子有三公斤"
+
+
 def test_a_realistic_sales_sentence_survives_both_preprocessing_layers(tmp_path):
     # TN 與讀音鎖定的互動只有跨層的測試看得到：TN 會把 `{qi2}` 的聲調數字展開成 `{qi二}`，
     # 故順序倒了整句的標記都會失效，而逐層的案例表看不出來。
