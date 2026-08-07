@@ -1,20 +1,16 @@
 # Vibe-Vox 交接文件
 
 **日期**：2026-08-07
-**分支**：main @ `9349fb5`（工作樹乾淨，已 push）
-**範圍**：#6 TTS 合成路徑打通（`93effa0`）。前一 session 的 TTS 引擎決策落地與 VoxCPM2 實測見第 2 節。
+**分支**：main @ `0d65a78`（工作樹乾淨，已 push）
+**範圍**：架構審查的四個候選落地（`27edf5b` `c14bc90` `de579bd` `0d65a78`）。前一輪的 #6 TTS 合成路徑見第 2 節。
 
 ---
 
 ## 0. 一句話現況
 
-**#6 把合成路徑從端點一路接到了真實的 vLLM-Omni**：adapter、契約補齊、`docker/tts.Dockerfile`、TTS 測試頁與音色試聽都在了，九條驗收項全數完成。
+**#6 把合成路徑接到了真實的 vLLM-Omni，但仍然沒有一次真的合成過。** 整條路徑每一段都有測試，卻沒有一段跑過真的 GPU——tts 服務從未啟動、`docker/tts.Dockerfile` 從未 build 過、三個模型能否共存也還沒量（#31）。這件事**四個架構深化沒有改變**，它仍然是最前面的阻塞——先把它跑起來，不要再往上疊功能。
 
-**但仍然沒有一次真的合成過。** 整條路徑的每一段都有測試，卻沒有一段跑過真的 GPU——tts 服務從未啟動、Dockerfile 從未 build 過、三個模型能否共存也還沒量（#31）。**#6 刻意不關票**，標籤改 `ready-for-human`：剩下的不是實作，是要有人去起服務並用耳朵與 `nvidia-smi` 驗。
-
-**下一步是把它起起來，而不是再往上疊功能。**
-
-TTS 引擎變更的七張決策票解掉三張（#14 #15 #16），剩 #17–#20。
+本輪做的是內部結構：對齊 seam 的回傳型別、模型服務例外的歸位、「一次辨識」有了 module、TTS 文字安全的兩層缺陷。**消費端契約的回應形狀完全未變**（`/api/asr/transcribe` 與 `/api/tts/speech` 的 key 集合逐一比對過），但有一項消費端可見、一項部署可見的**行為**變更，見 §3.2。
 
 ---
 
@@ -26,18 +22,18 @@ docker compose --profile tts up tts
 
 然後四件事，順序有意義：
 
-1. **確認 image build 得起來。** `docker/tts.Dockerfile` 從未跑過。`vllm/vllm-omni:v0.24.0` 是 Docker Hub 上實際存在的最新版本 tag（官方安裝文件的範例寫 v0.26.0，但那個 tag 尚未發布，文件領先了 registry）。**官方 image 是否已含 `voxcpm` 套件未查證**，故 Dockerfile 自行 `pip install voxcpm soundfile ninja`——若 image 本來就有，那幾行是冗餘但無害；若沒有而我漏了別的相依，服務會起不來。
-2. **量 VoxCPM2 的實際 VRAM。** 帶 `gpu_uuid`，且**等它完全啟動後**才有意義（啟動途中的讀數會低估數 GB，前一 session 踩過）。compose 的 `--gpu-memory-utilization 0.17` 與 `--kv-cache-memory-bytes 1 GiB` 是**未實測的保守起點**，一定要照實測改 → #31。
+1. **確認 image build 得起來。** `docker/tts.Dockerfile` 從未跑過。`vllm/vllm-omni:v0.24.0` 是 Docker Hub 上實際存在的最新版本 tag（官方安裝文件寫 v0.26.0，那個 tag 尚未發布，文件領先了 registry）。**官方 image 是否已含 `voxcpm` 套件未查證**，故 Dockerfile 自行 `pip install voxcpm soundfile ninja`——若 image 本來就有，那幾行冗餘但無害；若沒有而我漏了別的相依，服務會起不來。
+2. **量 VoxCPM2 的實際 VRAM。** 帶 `gpu_uuid`，且**等它完全啟動後**才有意義（啟動途中的讀數會低估數 GB，前一輪踩過）。compose 的 `--gpu-memory-utilization 0.17` 與 `--kv-cache-memory-bytes 1 GiB` 是**未實測的保守起點**，一定要照實測改 → #31。
 3. **打一次 `POST /api/tts/speech`。** 確認端點真的回 48 kHz、降採樣後聽起來正常、Instruction 在真模型上真的有作用。
 4. **量首音延遲與 RTF。** #17 才問得到我們自己的系統。
 
-### 提交流程的兩個坑
+### 提交流程
 
-專案慣例是提交前跑 clean-code 與 code-review，有 pre-commit gate 擋著（`~/.claude/hooks/require-review-before-commit.ps1`）。兩件實測：
+專案慣例是提交前跑 clean-code 與 code-review，有 pre-commit gate 擋著（`~/.claude/hooks/require-review-before-commit.ps1`）。
 
-- **同一輪內先 invoke skill 再 commit 一定被擋**，hook 讀 transcript 的時機早於該輪寫入。要分兩輪。
-- **被擋的嘗試可能被誤判為新的 window 起點。** gate 判定「這次被擋了不算」的方式是看該 commit 行之後 **4 行內**有沒有 deny 訊息；超出 4 行就會把那次失敗的嘗試當成 `lastCommit`，於是先前的 skill invoke 全被排除在窗口外。本 session 因此來回三次。**可行的走法是：在最後一次被擋之後才跑審查，下一輪再提交。**
-- 純文件改動可以請使用者放行，但 gate 是 PreToolUse deny、看不到放行，最快是請他自己打 `! git commit ... && git push`。
+**唯一可行的走法：這一輪 invoke skill、下一輪才 commit。** hook 讀 transcript 的時機早於該輪寫入，同一輪內先 invoke 再 commit 一定被擋。本輪四次提交都照這個節奏走，四次都一次過。
+
+判準是「上一次**成功**的 commit 之後有沒有跑」，被 gate 擋下的嘗試不計入。
 
 ---
 
@@ -45,200 +41,180 @@ docker compose --profile tts up tts
 
 ### 2.1 已實作 ≠ 已驗證
 
-#6 交付後整條路徑的程式碼都在了，**但沒有任何一次合成經過真的模型**。所有 TTS 行為的依據仍是逐行讀 vLLM-Omni 原始碼取得的。
-
-`docs/api/tts.md` 現在**逐項標示實作狀態**（原本全文標「尚未實作」）。三個缺口寫在文件開頭：分塊串流與 mp3 帶了回 400、TN + G2P 前處理層是靜默的品質落差。
-
-端點會不會真的收到 48 kHz、Instruction 在真模型上是否生效、降採樣後聽起來如何——這三件事都要等服務起來。
+所有 TTS 行為的依據仍是逐行讀 vLLM-Omni 原始碼取得的，沒有一次經過真的模型。`docs/api/tts.md` **逐項標示實作狀態**，三個缺口寫在文件開頭：分塊串流與 mp3 帶了回 400、TN + G2P 前處理層是靜默的品質落差。
 
 ### 2.2 Instruction 要寫聲學描述，寫情緒名稱沒有效果
 
-前一 session 的實測，是**唯一一項推翻既有契約敘述**的。完整數據見
-`docs/superpowers/specs/2026-08-05-voxcpm2-style-control-measured.md`。
+完整數據見 `docs/superpowers/specs/2026-08-05-voxcpm2-style-control-measured.md`。結論：雜訊底線是長度 ×1.18／音量 ×1.32；`(生氣、大聲吼、語速很快)` 量到 ×1.88／×1.55（遠超雜訊），而 `(開心)`／`(難過)`／`(不耐煩)` 全在雜訊內。中文前綴強於英文。
 
-先建立雜訊底線（同輸入三次）：**長度 ×1.18、音量 ×1.32**。沒有這把尺，前兩輪測試的結論全都不可解讀。
-
-| 前綴 | 長度 | 音量 | 判定 |
-|---|---|---|---|
-| `(生氣、大聲吼、語速很快)` | ×1.88 | ×1.55 | 遠超雜訊，聽感明顯 |
-| `(生氣)` | ×1.05 | ×1.36 | 雜訊邊緣 |
-| `(開心)`／`(難過)`／`(不耐煩)` | ×1.00–1.15 | ×1.01–1.17 | **全在雜訊內** |
-
-使用者聽感：極端聲學對比「明顯」，五個情緒詞「差別不大」。**中文前綴強於英文**（1.55／1.88 對 1.37／1.50），兩個指標一致。
-
-已據此改掉 `docs/api/tts.md` 的 `instruct` 說明與四個範例、`CONTEXT.md` 的 Instruction 詞條、`docs/spec.md` 的 US29 與範例清單要求、前端面板的說明文字。
-
-**這組數字是在合成參考音上量的**，未隔離的變項見第 7 節。
+已據此改掉契約、`CONTEXT.md` 的 Instruction 詞條、`docs/spec.md` 與前端說明文字。**唯一沒隔離的變項見第 6 節。**
 
 ### 2.3 定版是功能上的必要條件，不是效能優化
 
-zero-shot 同一段描述三次：長度 4.32／2.56／3.36 秒，**離散 69%**，使用者聽感是**三個不同的人**。
-
-帶參考音（reference clone）三次：**離散 18.2%**，聽感是**同一個人、速度些微差異**。
-
-所以 design 音色若在合成時才從描述重生，同一段對話會逐句換人。ADR-0002 的「建立時定版」沒有它，多句對話不可用。
+zero-shot 同一段描述三次離散 69%，使用者聽感是**三個不同的人**；帶參考音三次離散 18.2%，聽感是同一個人。所以 design 音色若在合成時才從描述重生，同一段對話會逐句換人。ADR-0002 的「建立時定版」沒有它，多句對話不可用。
 
 ---
 
-## 3. 本 session 完成（`93effa0`、`9349fb5`）
+## 3. 本輪完成的四個架構候選
 
-### 3.1 #6 的九條驗收項
+來源是 `/improve-codebase-architecture` 產的八候選報告（在 scratchpad，已隨 session 消失；剩下四個候選的完整內容抄在第 4 節）。
 
-`TtsClient.synthesize()`、`adapters/vllm_omni_tts.py`、`StubTtsClient.synthesize()`、`POST /api/tts/speech`、48 kHz → 24 kHz 降採樣、compose 的 tts 服務、`TtsPanel`、音色試聽、測試。逐條對照見 #6 的 comment。
+| | 候選 | commit |
+|---|---|---|
+| C2 | 對齊結果攜帶切片範圍與缺漏原因 | `27edf5b` |
+| C4 | 錯誤模式搬進 `AsrClient`／`TtsClient` interface | `c14bc90` |
+| C1 | 給「一次辨識」一個 module | `de579bd` |
+| C3 | 中性化收斂到不動點、判空量在中性化之後 | `0d65a78` |
 
-**測試**：BFF 194 passed / 5 skipped（前一 session 是 165/4）、frontend 59 passed（前一 session 49）、typecheck 與 ruff 乾淨、`docker compose config` 通過。
+四個補償點退場（`alignment._bounds`、`aligner._log_dropped_batches`、`api/asr.py::_align_or_degrade`、`aligner_failed` 布林），一個死欄位（`TranscriptionResult.duration`）與一個死設定（`Utterance` 的 `validate_assignment`）清掉。測試：後端 222 passed / 5 skipped、前端 59 passed（皆為本輪實跑）。
 
-### 3.2 三項與直覺相反的端點行為，全部靠原始碼取證
+決策細節在 ADR-0004 的 Consequences（本輪新增三段）與各 commit message，此處不重複。
 
-- **不送 `ref_text`。** 給了會落到 continuation（Hi-Fi）模式，行內風格失效。只給 `ref_audio` 才是 reference（Controllable）模式。
-- **不送 `instructions` 與 `task_type`。** 兩者對 VoxCPM2 從未被讀取且不報錯——帶了會回 200 加一段沒套用該風格的音訊。
-- **`voice` 恆為 `"default"`。** VoxCPM2 沒有內建語者，該欄位是 OpenAI schema 的必填項但模型語意上忽略它。
+### 3.1 順帶修掉的四個真 bug
 
-### 3.3 控制語法中性化下沉為型別的不變量
+1. **落界判準的格點錯位。** `alignment._bounds` 用未量化的段界重算，而 Word 時間戳取三位小數，恰好對到切片邊界的字會被判為落在該段音訊之外。ADR-0004 記載該判準「正常路徑下不會觸發」，所以它一旦誤觸發會被讀成上游行為改變。修法是 `Slice.bounds` 兩端各向外取到毫秒格點。
+2. **分批後的逾時預算失效。** #36 改分批送出後，對齊最壞耗時變成「批數 × 逾時」而 `heavy_request_budget()` 只加一次。63 段的錄音（8 批）會讓 guard 先觸發回 504，**逐字稿一併喪失**——正是 ADR-0004 第二層降級要避免的。改為所有批次共用一份預算，以 `asyncio.timeout` 施加。
+3. **判空量在中性化之前。** `<|im_end|>` 的字母通得過判空，中性化後整段被移除，於是空的 `Utterance` 佔掉 heavy guard 額度、打一次 GPU、回空音訊 200，而契約要 400。
+4. **中性化本身不收斂**（見 §5.1）。
 
-`instruct` 由 adapter 組成行內 `(...)` 前綴併入同一個字串，所以未中性化的括號能讓使用者文字變成語氣指令，或讓 `instruct` 的右括號跳出自己的前綴。
+### 3.2 部署與消費端要知道的三項變更
 
-中性化原本在端點層，後來下沉到 `adapters/base.py` 的 `Utterance` validator，並加 `frozen=True, validate_assignment=True`——沒有那兩個設定，`u.text = "(evil)"`、`model_construct()`、`model_copy(update=...)` 三條路都繞過 validator，而 docstring 宣稱的保證範圍會比實際大。
-
-同時剝除 `<|...|>` 特殊 token 標記。上游是 `tokenizer.encode(add_special_tokens=True)` 直吃我們送的字串，原樣通過會讓模型看到控制訊號而非字面內容。**ASR 側的 Hotword 清洗早就這樣防了**（`hotword_text.sanitize_text`），TTS 走同一類通道卻漏了。
-
-### 3.4 降採樣走 ffmpeg 管線，本機另以 imageio-ffmpeg 實跑驗證
-
-48 kHz → 24 kHz／mono／16-bit，全程 pipe 不落磁碟。相同規格時跳過轉碼——那不是為測試開的後門，避免無謂的重編碼與子進程往返本身就是對的。
-
-本機無 ffmpeg 使該測試 skip，所以另外借 `imageio-ffmpeg` 的 binary 實跑一次：440 Hz 正弦 48000 frames → 24000 frames，RMS 守恆（14141.7 → 14141.7）。**不把「本機測不到」當成「應該會對」。**
-
-### 3.5 `9349fb5` 更正 agent skills 設定的三處錯誤記載
-
-`docs/agents/` 的三份設定檔曾被加上「該 skill 未安裝」的註記，那是錯的——見 §5.9。
+- **只含控制語法的 `input` 從 200 變 400 `EMPTY_INPUT`**（消費端可見）。例如 `<|im_end|>`：舊行為回一段空音訊 200，新行為依契約回 400。這是修正契約違反而非契約變更（`docs/api/tts.md` §6 本來就寫「或經正規化後為空」），但依賴舊行為的呼叫端會看到差異。
+- **對齊的逾時語義從「每批」變成「整體預算」**（部署可見）。`VIBE_VOX_ALIGNER_TIMEOUT_SECONDS` 的意義變了：它現在是所有批次共用的一份，不是每批各有一份。
+- `AlignerClient.align` **不再拋出對齊層的例外**（內部）。服務掛掉、逾時、某批失敗都轉成該段的 `omission`，ADR-0004 的第二層降級因此成為 interface 的保證而非呼叫端的紀律。
 
 ---
 
-## 4. 下一步
+## 4. 剩下的四個架構候選
 
-### 4.1 #6 的三個缺口（不屬本票驗收，但影響輸出品質）
+報告已消失，以下是可執行的完整內容。四個都通過 deletion test，不推翻任何 ADR 的 Decision。
 
-1. **TN + G2P 前處理層**（`tts_text.py` 目前只有控制語法中性化與特殊 token 剝除）。#15 已把管線定死到不需再 grill 的程度：`raw 繁中 → 淨化 {} → wetext TN + 台灣規則補丁 → OpenCC s2tw → g2pW（只鎖差異字）→ VoxCPM2(normalize=False)`，順序不可倒置。但**沒有票**。沒有它，數字唸法與破音字落到 zh-CN 的行為，而且不會報錯。
+### 4.1 C6 — 管理平面的清單編輯狀態機無歸屬（純前端，建議先做）
 
-   **實作時有個陷阱寫在 `tts_text.py` 的註解裡**：WeTextProcessing 的 `full_to_half` 預設為 `True`，而中性化的做法是把半形括號轉全形——TN 一接上就會把它折回半形，整道安全邊界失效。屆時要嘛關掉 `full_to_half`，要嘛改成刪除而非轉全形。同理，Unicode 相容等價的括號變體（U+FE59、U+207D、U+208D、U+FE35 等，NFKC 都折回半形）目前刻意不處理，因為上游不做正規化——TN 接上後就會。
+**問題**：`HotwordsPanel.tsx:42-50` 與 `VoicesPanel.tsx:52-60` 有字面相同的 `run()`（執行變更 → 清錯 → 重抓 → 捕捉錯誤），差別只有 `load` 的參數個數。而 `loading` 狀態只有送模型端點的兩個 Panel 有，清單類的兩個沒有，於是**「載入中」與「真的空」在 UI 上無法區分**：
 
-2. **分塊串流**（回 400 `STREAM_UNSUPPORTED`）。ADR-0003 第 20 行「TTS 串流回應納入範圍」已加註實作狀態，**決策未撤回**。#17 的延遲 bar 未定，且串流實作後才談得上首音延遲。
-3. **mp3 輸出**（回 400 `UNSUPPORTED_RESPONSE_FORMAT`）。需要編碼器。
+- `VoicesPanel.tsx:157-158` 首次 render 就顯示「尚未建立任何音色」
+- `TtsPanel.tsx:46,61,112` 清單未回時擋住送出並說「請先建立一個」
+- `VoicesPanel.tsx:100,158` error 與「尚未建立」同時顯示
 
-另有一項已知殘留：FastAPI 對每個帶 body 的端點自動宣告 422，而 `main.py` 一律轉 400，那個 422 永遠不會發生。`openapi_extra` 是合併不是取代，拿不掉；要修得動所有端點，不屬 #6。
+這直接違反 CONTEXT.md 的**能力感知**（介面只提供模型實際具備的能力，不讓使用者對不存在的能力下指令）——它對操作者宣告了一個假的系統狀態。
 
-### 4.2 剩餘的決策票
+**解法**：`{loading | ready | empty | error}` 四態成為一個 module 的 interface，三個 Panel 消費它。`App.tsx:17-20` 的 `HealthState` 已經是這個形狀，前端目前有兩套判別式狀態。
 
-`#17` 延遲 bar（需要跑起來的服務才量得到）、`#18` 消費端契約重定、`#19` 新 ADR 取代 ADR-0001、`#20` CONTEXT 的 TTS 詞彙。
+**deletion test**：刪掉兩份 `run()` 中的任一份不可能——沒有共同歸屬地正是重複的成因。就地展開則 6 個變更操作各自長出 try/catch（估算約 40 行，未實作驗證）。
 
-`#19` 已登記三項 ADR-0001 的既有衝突。`#20` 待決的只剩 Instruction 是否改名、模式用語要不要入詞彙表。
+**順帶可收**：9 處 `err instanceof Error ? … : "字面 fallback"`（各 module 已保證只拋 `Error`，else 分支全部不可達）、兩份 `unwrap`、四份 `errorMessage`（`asr.ts` 那份有 504 邏輯要留）、20 行死碼 `SectionPanel`（`App.tsx:88-107`，四個 `SectionKey` 都被顯式接上，fallback 不可達）。
 
-**`#18` 已幾乎是空票**：四個子問題有三個被 #14／#16 答掉（逐句情緒走行內前綴、ID 方案含已不存在的 preset 型別、模式固定 Controllable 不進契約），實質未決的只剩「降採樣落在哪一端」，而 #6 已經把它放在 adapter。
+### 4.2 C7 — 參考音的可用性該是 Voice 的不變量（對應 #44、#45）
 
-`/wayfinder` 與 `/grill-with-docs` **都有安裝**（見 §5.9），#13 那張 map 可以續接。
+**問題**：一條不變量有兩個文件化 owner、零個實作 owner。`docs/spec.md:95` 說 adapter 該驗時長，`adapters/vllm_omni_tts.py` 的 `_data_url` 註解反過來說「正確的防線在建立音色時」，而 `api/admin_voices.py` 的建立路徑沒驗。超界的 Voice 每次合成都回 502，而契約把該碼標為可重試 → 消費端退避重試一個永久失敗。
 
-### 4.3 其他
+同一個 `_data_url` 還有第二個問題：`path.read_bytes()` 是**同步 I/O 跑在 async event loop 裡**，而 `config.audio_max_bytes` 是 200 MiB 且被 `admin_voices.py` 的 `create_clone_voice` 直接當參考音上限。一個 200 MiB 的參考音會讓**每一次合成**在 event loop 內同步讀 200 MiB 並編出 267 MiB 字串，期間整個 BFF（含 `/api/health` 與所有 ASR 請求）停住。
 
-`#44`（由 #6 的 review 分出）**參考音時長未在建立時驗證**：端點強制 1.0–30.0 秒，我方三層都沒擋，超界的音色每次合成都回 502 `TTS_UNAVAILABLE`——而契約把該碼標為可重試，消費端會退避重試一個永久失敗。順帶發現 `admin_voices.py` 完全沒呼叫 `detect_audio_format`，任意檔案都存得進音色目錄。
+**解法**：Voice clone 的上傳走 `AudioIntake` 這個 seam，讓參考音的可用性（存在、可讀、容器合法、時長合規）在建立時成為 Voice 的不變量；參考音的大小上限與 ASR 上傳解耦。
 
-`#8` design 建立（定版）、`#43` 麥克風錄音、`#7` 的更換參考音與改逐字稿、`#31` `#32` `#39` `#40` `#41` 未動。
+**注意**：`admin_voices.py` 呼叫的 `save_upload` **已經會嗅容器並拋 `UnsupportedAudioFormat`**（`intake.py:45-46`）——前一版交接文件寫「任意檔案都存得進音色目錄」是**錯的**。缺的是時長（#44）與檔案可讀性（#45），不是容器型別。
+
+### 4.3 C5 — Voice 沒有型別，SQL DDL 成了對外契約
+
+**問題**：`persistence/voices.py:72-80` 的 `list()`／`get()` 回 `dict(row)`（`SELECT *` 直轉），於是 `voices` 表的 DDL 就是管理平面的回應形狀與前端型別：`api/admin_voices.py:96-98` 無投影地把整列丟出去（含伺服器檔案系統路徑），`frontend/src/voices.ts:6-16` 逐欄鏡射該 DDL。**表加一欄，對外形狀就變了，而中間沒有任何一行程式碼需要修改，也沒有任何測試會失敗。**
+
+三個 module 用字串常數知道欄名（`voice["ref_audio_path"]`），改欄名不會有型別錯誤，只會在執行期 `KeyError` → 500。
+
+**deletion test**：`VoiceRepository` 該留（刪掉會把 SQL 與唯一性語意複製到 3 處）。可刪的是 `files/cleanup.py:48-55` 那 8 行裸 SQL——它繞過 `persistence/db.py` 的 `connect()`，因此沒有 WAL 也沒有 `busy_timeout=5000`，而 `test_db.py` 正是為那兩個 PRAGMA 存在的。
+
+**順帶可收**：`voices.instruct` 欄位無 writer 無 reader（違反該 module 自己「不存沒有已知用途的欄位」的理由）；`HotwordRepository` 回 `None`／`False` 而 `VoiceRepository` 自己拋，同一目錄下兩個姊妹 module 對「列不存在」的錯誤模式相反。代價是 `admin_hotwords.py` 帶 3 份手工存在性檢查，而那 3 份**還分成兩種形狀**（2 份判 `None`、1 份判 `False`）——不一致不只跨 module，同一個 module 內就有。
+
+### 4.4 C8 — 消費端契約有 10 對手工同步的形狀
+
+**問題**：除 `/api/tts/speech`（`-> Response`，回二進位音訊）與 `GET /api/hotwords`（`-> list[dict]`）外，端點的回傳型別註記都是裸 `dict`，FastAPI 因此產不出回應 schema，`/openapi.json` 無法作為前端型別的來源。前後端的形狀全靠手工同步、無任何契約測試比對。
+
+**最高風險是 `AsrSegment.aligned`**：ADR-0003 定它為契約唯一「同一欄位有兩種語義」之處（`Start`／`End` 的意義隨它翻轉）。後端若改名，TypeScript 仍對著手寫型別編譯成功，執行期 `undefined` → falsy → **全段渲染「未對齊」，把模型自選的切點時間戳當成已檢查過的結果呈現**。失效靜默且語義錯誤，而測試的 mock 自帶該欄位也不會失敗。
+
+**解法**：端點宣告回應型別；跨部署單元的邊界用 repo **已有**的技術守住——`bff/tests/test_config.py:28-46,60-87,100-143` 對 nginx.conf、aligner config、docker-compose.yml 都是「實際去讀對方的檔案」比對，理由寫在 `:31-32`（「字面值的斷言防不了那種失效：把設定刪掉，斷言照樣過」）。那項 leverage 目前沒有指向前端。
+
+**順帶可收**：消費端 `DELETE /api/hotwords/{id}` 對不存在的 id 回 200，管理平面同一個呼叫回 404——超集關係已破且無測試守著；同一個 delete 操作在三個 router 有三種回應形狀（`admin_voices.py:110` 用了消費端形狀）。
 
 ---
 
 ## 5. 給接手者的警告
 
-### 5.1 讀來的不是知道的
+### 5.1 只調順序修不掉不收斂的函式（本輪）
 
-前一 session 最大的問題是把官方文件當成驗證。使用者原話：「你都不確定，那你為什麼會確定」「你只照本宣科，有什麼功能、有什麼限制、有什麼界線，你都不知道，你就宣稱答案了」。
+C3 原本的診斷是「判空與中性化的順序錯了」，修法是把兩者合成一個步驟。**那個修法對真正的缺陷無效。**
 
-具體犯法三種，逐一記著因為它們會重演：
+`<\|.*?\|>` 是非貪婪匹配，移除一層後殘骸可能重新組成合法標記：`<<||>|x|>` 的中間段 `<||>` 被吃掉後剩 `<|x|>`。中性化在合成路徑上跑兩次，不收斂就代表兩次結果不同——判空看到的字串與真正送出去的不是同一個。實測：只調順序的版本，`input="<<||>|你好|>"` 仍回 200 並送出空 `Utterance`；instruct 路徑更糟，`<|x|>` 原樣進模型。
 
-**讀文件當驗證。** 官方 README 列了三種模式，就宣稱「走 design，不需要錄音」。實際上 **Voice design 從來沒被任何 spike 測過**——#11 測台灣讀音、#12 測情緒 vs 保真，兩者都用 clone 路徑。
+**先確認每個步驟自己是冪等或收斂的，再談它們的順序。** 同一缺陷在 ASR 側的 `hotword_text.sanitize_text` 也有，已一併修。
 
-**讀原始碼但讀錯版本。** `VoxCPM._generate` 在 GitHub `main` 有 `seed` 參數，**發行版 `voxcpm 2.0.3` 沒有**（實跑得到 `TypeError`）。**`main` 的 HEAD 不等於會裝到的東西。**
+### 5.2 候選的前提會被前一個候選改掉（本輪）
 
-**測錯層。** 用 `voxcpm` PyPI 套件測，但 production 走 vLLM-Omni 自己的實作，根本不呼叫那個套件。
+架構報告寫 C4「三個 seam（TTS／ASR／aligner）一次修完」。但 C2 已經讓 aligner 的兩個例外就地轉成 `omission`、不再跨 seam——照抄報告會把 implementation 細節提到 interface 上，方向相反。
 
-### 5.2 沒有雜訊基線的量測不可解讀
+**依序執行候選時，每個候選開始前重新驗證它的前提。**
 
-連跑兩輪 spike 才想到要建雜訊底線。在那之前，`(生氣)` 的音量 ×1.36 一度被當成訊號——它其實貼在 ×1.32 的雜訊邊緣。
+### 5.3 讀來的不是知道的
 
-**同一輸入跑三次先量離散度，再解讀任何差異。**
+前幾輪最大的問題是把官方文件當成驗證。三種犯法會重演：
 
-同一輪還有一個量測直接失效：`torchaudio.functional.detect_pitch_frequency` 在 48 kHz 上以預設參數量到 580–725 Hz、標準差 900 Hz，而人聲基頻約 85–255 Hz、標準差不可能大於平均。**指標本身要先驗證量得到你要的東西。**
+- **讀文件當驗證。** README 列了三種模式就宣稱「走 design 不需要錄音」，而 Voice design 從來沒被任何 spike 測過。
+- **讀原始碼但讀錯版本。** `VoxCPM._generate` 在 GitHub `main` 有 `seed` 參數，發行版 `voxcpm 2.0.3` 沒有。**`main` 的 HEAD 不等於會裝到的東西。**
+- **測錯層。** 用 `voxcpm` PyPI 套件測，但 production 走 vLLM-Omni 自己的實作。
 
-### 5.3 不要把答案寫進問題裡
+### 5.4 沒有雜訊基線的量測不可解讀
 
-測情緒時用的提示詞是「生氣、**大聲吼、語速很快**」，量到音量與語速改變就差點當成情緒生效。那是自己要求的東西。拿掉聲學提示、只給情緒詞重測，才得到真正的答案。
+連跑兩輪 spike 才想到建雜訊底線。在那之前 `(生氣)` 的音量 ×1.36 一度被當成訊號——它其實貼在 ×1.32 的雜訊邊緣。**同一輸入跑三次先量離散度，再解讀任何差異。**
 
-### 5.4 註解不能宣稱不存在的機制
+同一輪還有一個量測直接失效：`detect_pitch_frequency` 在 48 kHz 上以預設參數量到標準差 900 Hz，而人聲基頻標準差不可能大於平均。**指標本身要先驗證量得到你要的東西。**
 
-三次了，每次形狀不同：
+### 5.5 註解不能宣稱不存在的機制
 
-1. `repository.delete` 的 docstring 寫「實體檔留給清理程序回收」，而**那個回收者不存在**（`cleanup.py` 只掃 `temp_dir`）。刪音色會永久洩漏磁碟，而註解讓它看起來有人管。
-2. #6 的前端加了 `eslint-disable-next-line jsx-a11y/media-has-caption`，而**這個 repo 沒有 eslint 設定**。
-3. `Utterance` 的 docstring 寫「中性化由本型別保證」，但沒有 `frozen`／`validate_assignment` 時**三條路都繞得過**。安全審查實測出來的。
+四次了，每次形狀不同：
 
-**寫「由 X 處理」之前，先確認 X 存在，而且確認它涵蓋你宣稱的範圍。**
+1. `repository.delete` 的 docstring 寫「實體檔留給清理程序回收」，而那個回收者不存在。
+2. #6 的前端加了 `eslint-disable-next-line`，而這個 repo 沒有 eslint 設定。
+3. `Utterance` 的 docstring 宣稱的保證範圍大於實作（`model_construct` 與 `model_copy(update=)` 繞得過）。本輪已修：docstring 收斂到實際範圍，並用測試釘住那兩條逃生口確實存在。
+4. **本輪的前一版交接文件**寫「`admin_voices.py` 完全沒呼叫 `detect_audio_format`，任意檔案都存得進音色目錄」——`save_upload` 內就會嗅。
 
-### 5.5 使用者的耳朵與數字是兩把不同的尺
+**寫「由 X 處理」之前，先確認 X 存在、而且涵蓋你宣稱的範圍。反過來，寫「X 沒做」之前，先確認它沒有透過別的呼叫做掉。**
 
-RMS 與長度量得到韻律，**量不到情感**。使用者說「不能很肯定是不是生氣，只是聲音大、語速快」——那是數字碰不到的一層。反過來，使用者聽感也需要數字校準：「中文對比比較大」對應到 1.55／1.88 對 1.37／1.50。
+### 5.6 審查跑到一半斷掉不等於審過
 
-### 5.6 問句不是工單
+#6 的第二輪 code-review 回報「No findings survived verification」，實際 stats 是 `candidates: 61, verified: 0`——61 個候選缺陷產出後，47 個 verifier 全部因週限額失敗。那不是「審過沒問題」，是「審到一半斷電」。
 
-使用者問「clone 有做麥克風錄音嗎」，答完就直接開始寫測試，被質問才回頭補票——順序完全反了。**要做功能就開票。**
+**看 stats 不要只看結論。** 本輪四次審查都完整跑完，兩軸各自找出真缺陷——其中兩個是我沒看到的（§5.1 的不收斂、格點錯位只修一半）。**審查的價值在它會推翻你的診斷，不在它蓋章。**
 
-### 5.7 沒做出來的東西不要為它寫驗證
+### 5.7 available skills 清單不是安裝清單
 
-曾為「參考音時長 1.0–30.0 秒」開票（#42，已關），而當時合成端點不存在、TTS 服務沒部署，**從來沒撞到過**。使用者原話：「你功能沒做出來怎麼驗證，一直在空跑，猜測」。
+那份清單只是 agent 能主動 invoke 的子集，使用者以 `/plugin:skill` 叫得起清單外的。**要判斷 skill 在不在，看 `~/.claude/plugins/cache/<owner>/<plugin>/<version>/skills/`。** 在建議流程時不要因為「我叫不起來」就排除某條路徑——那是 agent 的限制，不是環境的限制。
 
-**先讓路徑跑通，有實際的失敗樣態再設計驗證。** 註記：#6 交付後路徑通了，同一件事以 #44 重新開票——這次有具體的失敗樣態（502 被標成可重試）。
+### 5.8 其餘仍然有效的教訓
 
-### 5.8 審查跑到一半斷掉不等於審過
+不要把答案寫進問題裡（測情緒時提示詞含「大聲吼、語速很快」，量到的是自己要求的東西）、使用者的耳朵與數字是兩把不同的尺、問句不是工單（要做功能就開票）、沒做出來的東西不要為它寫驗證、驗證要從既有狀態出發、推算的數字要明說是推算、沒設定的預設值也是配置（nginx 的 60 秒）、測試資料的規模要貼近真實負載。
 
-#6 的第二輪 code-review 回報「No findings survived verification」，看起來乾淨。實際的 stats 是 `candidates: 61, verified: 0`——61 個候選缺陷產出後，47 個 verifier **全部因週限額失敗**（55 個 agent 只有 7 個完成）。
-
-那不是「審過沒問題」，是「審到一半斷電」。重跑之後兩軸各找出四項實質缺陷，其中兩項會實際咬人（參考音時長 → #44、data URI 謊報容器）。
-
-**看 stats 不要只看結論。** `verified: 0` 配 `candidates: 61` 是失效的訊號，不是好消息。
-
-### 5.9 available skills 清單不是安裝清單
-
-本 session 從 agent 的 available skills 清單推論 `/wayfinder`、`/grill-with-docs`、`/triage` 未安裝，據此在 `docs/agents/` 三份設定檔加了「該 skill 未安裝」註記，並在建議流程時排除了 `/wayfinder`。
-
-**全都是錯的。** 實際檢查磁碟，那七個 skill（另含 `to-spec`、`to-tickets`、`implement`、`improve-codebase-architecture`）在 `1.2.0` 與 `1.2.2` 都存在。使用者直接指正：「這個 /grill-with-docs 一定有，只是agent呼叫不起來而已吧」。
-
-**那份清單只是 agent 能主動 invoke 的子集**，使用者以 `/plugin:skill` 叫得起清單外的。本 session 的 `/mattpocock-skills:implement` 就是實例——它不在清單上，被叫起來了。
-
-同一個錯誤更早就寫進 #13 的 Notes（已留 comment 更正），害那張 map 的 index 一直手動維護。
-
-**要判斷 skill 在不在，看 `~/.claude/plugins/cache/<owner>/<plugin>/<version>/skills/`。** 反過來也成立：清單裡沒有不代表使用者叫不動，所以在建議流程時不要因為「我叫不起來」就排除某條路徑——那是 agent 的限制，不是環境的限制。
-
-### 5.10 前面幾輪的教訓仍然有效
-
-驗證要從「既有狀態」出發而非乾淨狀態、推算的數字要明說是推算、沒設定的預設值也是配置（nginx 的 60 秒）、現成的答案不要丟掉（錯誤訊息裡就有答案）、測試資料的規模要貼近真實負載、不要用 shell 做批次文字替換。這六條的完整脈絡見 git history 中 `2626508` 版本的本檔第 5 節。
+完整脈絡見 git history 中 `824f723` 版本的本檔第 5 節。
 
 ---
 
 ## 6. 資源位置
 
-**本 repo 的權威文件**：
+**權威文件**（單一真實來源，交接文件不重複其內容）：
 
-- `docs/api/asr.md` — ASR 消費端契約，**全文皆為已實作行為**
-- `docs/api/tts.md` — TTS 消費端契約，**逐項標示實作狀態**（三個缺口寫在文件開頭）
-- `docs/superpowers/specs/2026-08-05-voxcpm2-serving-transport.md` — 傳輸選型，逐行讀原始碼取證，九項缺口附查證方式
-- `docs/superpowers/specs/2026-08-05-tts-text-frontend-tn-g2p.md` — ttsfrd 判定與 TN／G2P 選型，十三項缺口
+- `docs/api/asr.md` — ASR 消費端契約，全文皆為已實作行為
+- `docs/api/tts.md` — TTS 消費端契約，逐項標示實作狀態
+- `docs/adr/0004-word-level-forced-alignment.md` — 字級對齊的決策、GPU 實測數據，與本輪新增的三段 Consequences（鏈路歸屬、逾時預算、對齊結果的形狀）
+- `CONTEXT.md` — 領域詞彙。本輪新增「一次辨識（Transcription）」與「對齊缺漏（Omission）」兩個詞條
+- `docs/superpowers/specs/2026-08-05-voxcpm2-serving-transport.md` — 傳輸選型，逐行讀原始碼取證
+- `docs/superpowers/specs/2026-08-05-tts-text-frontend-tn-g2p.md` — ttsfrd 判定與 TN／G2P 選型
 - `docs/superpowers/specs/2026-08-05-voxcpm2-style-control-measured.md` — 風格控制實測，含雜訊底線與量測失敗紀錄
-- `docs/adr/0004-word-level-forced-alignment.md` — 字級對齊的決策與 GPU 實測數據
-- `CONTEXT.md` — 領域詞彙（#6 新增 `Utterance` 詞條）
 
-**ADR-0001 標 `superseded`**，不改內文，取代它的新 ADR 是 #19。
-**ADR-0003 的串流條目已加註實作狀態**，決策本身未撤回。
+**ADR-0001 標 `superseded`**，取代它的新 ADR 是 #19。**ADR-0003 的串流條目已加註實作狀態**，決策未撤回。
 
-**spike harness**：`spike/voxcpm-tts` 分支（真人參考音、GPU）。前一 session 另做了 CPU 版的 design／clone／style／affect 四支 spike，在 scratchpad 未入 repo。
+**spike harness**：`spike/voxcpm-tts` 分支（真人參考音、GPU）。
 
 **遠端 GPU 機**：`http://10.2.66.102:8088`。只開 HTTP 8088，無 shell 存取。
+
+**開放中的票**：#6 #7 #8（TTS 功能）、#13（wayfinder map）、#17–#20（TTS 決策票）、#31 #32 #39 #40 #41（校準與部署）、#43（麥克風錄音）、#44 #45（參考音驗證，見 §4.2）。
 
 ---
 
@@ -246,8 +222,6 @@ RMS 與長度量得到韻律，**量不到情感**。使用者說「不能很肯
 
 `2026-08-05-voxcpm2-style-control-measured.md` §5：**所有風格控制的實測都用合成參考音**（zero-shot 產物，平板）。
 
-情緒在 voice cloning 中從參考音繼承表現力，故「情緒標籤無效」有兩種解釋，無法區分：模型的通道本身不處理情緒標籤，或通道有效但合成參考音沒有情感範圍可供調度。
+情緒在 voice cloning 中從參考音繼承表現力，故「情緒標籤無效」有兩種解釋，無法區分：模型的通道本身不處理情緒標籤，或通道有效但合成參考音沒有情感範圍可供調度。**唯一的正面證據不是這幾輪測的**：spike #12 以真人台灣參考音在情緒項 PASS。
 
-**唯一的正面證據不是這兩個 session 測的**：spike #12 以真人台灣參考音在情緒項 PASS。
-
-關閉方式：一段有表情的真人台灣錄音（5 至 30 秒）當參考音，重跑那五組。#43（麥克風錄音）一做出來就能取得這個素材——而 tts 服務起來之後，這件事就只差那段錄音。
+關閉方式：一段有表情的真人台灣錄音（5 至 30 秒）當參考音，重跑那五組。#43 一做出來就能取得這個素材——而 tts 服務起來之後，這件事就只差那段錄音。
