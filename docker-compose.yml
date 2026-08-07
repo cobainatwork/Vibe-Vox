@@ -1,8 +1,10 @@
 # Vibe-Vox 正式版編排：五部署單元，vLLM、aligner 與 TTS 共用單張 GPU
 # （ADR-0004：三模型常駐 RTX 6000 Ada 48GB）。
 #
-# 注意：**三個模型同時啟動從未實測**。ADR 的 VRAM 帳有兩項已知錯誤（實際是兩張卡、
-# 第二張被別的專案動態佔用；VoxCPM2 的 ~8 GiB 是估算非實測），校準歸 #31。
+# 2026-08-07 首次實測三個模型同時常駐 GPU 0：起得來（各服務實佔見 #31）。但那是**閒置
+# 常駐**的讀數，`nvidia-smi` 當下 GPU-Util 0%，三者同時推論未測。ADR 的 VRAM 帳仍有兩項
+# 已知錯誤（實際是兩張卡、第二張被別的專案動態佔用；VoxCPM2 的 ~8 GiB 是估算非實測），
+# 校準歸 #31。
 
 services:
   bff:
@@ -54,7 +56,7 @@ services:
     # **三個記憶體參數必須顯式列在這裡。** 不列的後果不是「用了不好的值」，而是那三個值
     # 寫在 image 內的上游 start_server.py 裡、連 grep 都找不到，而 ADR-0001 至今仍寫著
     # utilization 該壓到 0.55–0.6。這與 #35 的 nginx 預設 60 秒是同一個失效模式。
-    # 取值依據見 .env.example 與 HANDOFF.md 2.4；不變量由 bff/tests/test_config.py 守著。
+    # 取值依據見 .env.example，歷次量測見 #31；不變量由 bff/tests/test_config.py 守著。
     command:
       - python3
       - /app/vllm_plugin/scripts/start_server.py
@@ -63,7 +65,9 @@ services:
       - --max-num-seqs
       - "${VIBE_VOX_VLLM_MAX_NUM_SEQS:-8}"
       - --gpu-memory-utilization
-      - "${VIBE_VOX_VLLM_GPU_MEMORY_UTILIZATION:-0.70}"
+      # 0.65 而非 0.70：2026-08-07 實測 0.70 之下 tts 服務起不到（VoxCPM2 在啟動期因
+      # free memory 不足被拒），0.65 才三者共存。詳見 .env.example 同名項目。
+      - "${VIBE_VOX_VLLM_GPU_MEMORY_UTILIZATION:-0.65}"
     ipc: host   # vLLM 需要（官方 docker run 用 --ipc=host）
     networks:
       - vibe
@@ -94,8 +98,9 @@ services:
 
   tts:
     # vLLM-Omni 承載 VoxCPM2。見 docker/tts.Dockerfile。
-    # 仍置於 tts profile、預設不啟動：三個模型能否同時放進 GPU 0 尚未實測（#31），
-    # 而 ASR 測試不需要它（bff 在 VIBE_VOX_USE_STUB_MODELS=true 下走 stub）。
+    # 三個模型 2026-08-07 實測可同時常駐 GPU 0（#31），但**仍留在 tts profile、預設
+    # 不啟動**：它實佔 7952 MiB 而 ASR 測試不需要它（bff 在 VIBE_VOX_USE_STUB_MODELS=true
+    # 下走 stub），且三者同時在位時 nvidia-smi 只剩 2659 MiB。
     profiles: ["tts"]
     build:
       context: .
@@ -104,9 +109,10 @@ services:
     # per-instance 上限而非全卡瓜分（傳輸 findings §3.1.6），真正的約束是「啟動當下的
     # free memory ≥ total × 自己的 utilization」，不夠就在啟動期明確拒絕。
     #
-    # **這兩個值未經實測**，是能啟動的保守起點而非校準結果：VoxCPM2 的實際佔用要等
-    # #31 量出來。上游 voxcpm2.yaml 的預設（utilization 0.9、KV 6 GiB）在本機一定起不來，
-    # 因為 ASR 的 vLLM 已佔住大半張卡。
+    # 2026-08-07 實測：這兩個值在 ASR 降到 0.65 之後起得來，行程實佔 7952 MiB。但**尚未
+    # 打過合成請求**，推論期的峰值未知，故仍非校準結果——取值依據與量測的限制見
+    # .env.example 同名項目。上游 voxcpm2.yaml 的預設（utilization 0.9、KV 6 GiB）在本機
+    # 一定起不來，因為 ASR 的 vLLM 已佔住大半張卡。
     command:
       - vllm
       - serve

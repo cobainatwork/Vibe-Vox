@@ -8,24 +8,22 @@
 
 ## 0. 一句話現況
 
-**#6 把合成路徑接到了真實的 vLLM-Omni，但仍然沒有一次真的合成過。** 整條路徑每一段都有測試，卻沒有一段跑過真的 GPU——tts 服務從未啟動、`docker/tts.Dockerfile` 從未 build 過、三個模型能否共存也還沒量（#31）。這件事**四個架構深化沒有改變**，它仍然是最前面的阻塞——先把它跑起來，不要再往上疊功能。
+**tts 服務 2026-08-07 起來了，但仍然沒有一次真的合成過。** `docker/tts.Dockerfile` build 成功、三個模型實測可同時常駐 GPU 0（各服務實佔見 #31），為此 ASR 的 utilization 從 0.70 降到 0.65——0.70 之下 VoxCPM2 在啟動期因 free memory 不足被拒。**但那是閒置常駐的讀數，合成路徑一次都沒打過**，端點是否真的回 48 kHz、Instruction 在真模型上有沒有作用、推論期的 VRAM 峰值會不會吃掉僅剩的 2659 MiB，全部未知。這仍然是最前面的阻塞——先打完那一發，不要再往上疊功能。
 
 本輪做的是內部結構：對齊 seam 的回傳型別、模型服務例外的歸位、「一次辨識」有了 module、TTS 文字安全的兩層缺陷。**消費端契約的回應形狀完全未變**（`/api/asr/transcribe` 與 `/api/tts/speech` 的 key 集合逐一比對過），但有一項消費端可見、一項部署可見的**行為**變更，見 §3.2。
 
 ---
 
-## 1. 接手第一件事：把 tts 服務起起來
+## 1. 接手第一件事：打一次真的合成
 
-```
-docker compose --profile tts up tts
-```
+前兩步已完成（2026-08-07），剩下兩步：
 
-然後四件事，順序有意義：
-
-1. **確認 image build 得起來。** `docker/tts.Dockerfile` 從未跑過。`vllm/vllm-omni:v0.24.0` 是 Docker Hub 上實際存在的最新版本 tag（官方安裝文件寫 v0.26.0，那個 tag 尚未發布，文件領先了 registry）。**官方 image 是否已含 `voxcpm` 套件未查證**，故 Dockerfile 自行 `pip install voxcpm soundfile ninja`——若 image 本來就有，那幾行冗餘但無害；若沒有而我漏了別的相依，服務會起不來。
-2. **量 VoxCPM2 的實際 VRAM。** 帶 `gpu_uuid`，且**等它完全啟動後**才有意義（啟動途中的讀數會低估數 GB，前一輪踩過）。compose 的 `--gpu-memory-utilization 0.17` 與 `--kv-cache-memory-bytes 1 GiB` 是**未實測的保守起點**，一定要照實測改 → #31。
-3. **打一次 `POST /api/tts/speech`。** 確認端點真的回 48 kHz、降採樣後聽起來正常、Instruction 在真模型上真的有作用。
+1. ~~確認 image build 得起來~~ **已完成。** `docker/tts.Dockerfile` build 成功，`vllm/vllm-omni:v0.24.0` 可用，Dockerfile 自行 `pip install voxcpm soundfile ninja` 那幾行是否冗餘未查（服務起得來，故不影響）。
+2. ~~量 VoxCPM2 的實際 VRAM~~ **已量到閒置常駐值**：TTS 7952 MiB、ASR 31810 MiB、aligner 3628 MiB，`nvidia-smi` 剩 2659 MiB。`--gpu-memory-utilization 0.17` 與 KV 1 GiB 不必調。**但那次讀數在 tts 容器起來約 5 分鐘後、GPU-Util 0% 時取得，未確認模型是否已完全載入**（啟動途中的讀數會低估數 GB，2026-08-04 踩過）。細節與量測的限制見 #31。
+3. **打一次 `POST /api/tts/speech`。** 確認端點真的回 48 kHz、降採樣後聽起來正常、Instruction 在真模型上真的有作用。**這是現在最前面的一件事。**
 4. **量首音延遲與 RTF。** #17 才問得到我們自己的系統。
+
+第 3 步同時要看 VRAM：推論期的 activation 峰值還沒量過，而餘裕只有 2659 MiB。若合成時 OOM，旋鈕是 `VIBE_VOX_TTS_KV_CACHE_BYTES`（目前 1 GiB）與 ASR 的 utilization（目前 0.65）。
 
 ### 提交流程
 

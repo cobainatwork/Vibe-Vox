@@ -96,7 +96,7 @@ Vibe-Vox 是一個 ASR/TTS 後端服務，同時服務兩類消費者。**消費
 - **Instruction 以 `(...)` 前綴寫進 `input`，不經任何欄位。** `instructions` 與 `task_type` 對 VoxCPM2 不生效且不報錯——送了會得到 HTTP 200 加一段未套用該風格的音訊。BFF 不送這兩個欄位。
 - 一次 request 只承載一種風格，逐句不同語氣即逐句一次呼叫。切句與組風格前綴在 `TtsClient` 之上完成，`synthesize()` 收已切好的句子與各自風格，中文斷句規則不進 HTTP client。
 - 端點回 48 kHz mono，adapter 降為消費端契約要求的 24 kHz／mono／16-bit。
-- VRAM 協調：`gpu_memory_utilization` 是 per-instance 上限，不是同卡多實例瓜分的總額。約束為「本實例啟動當下的 free memory ≥ total × 自己的 utilization」，不足時在啟動期直接拒絕而非推論期 OOM。KV 尺寸以 `kv_cache_memory_bytes` 顯式封頂，封頂後不看 utilization。ASR 側現值 0.70。三個服務能否共存於 GPU 0 尚未實測，量測程序見 #31。
+- VRAM 協調：`gpu_memory_utilization` 是 per-instance 上限，不是同卡多實例瓜分的總額。約束為「本實例啟動當下的 free memory ≥ total × 自己的 utilization」，不足時在啟動期直接拒絕而非推論期 OOM。KV 尺寸以 `kv_cache_memory_bytes` 顯式封頂，封頂後不看 utilization。ASR 側現值 0.65——2026-08-07 實測 0.70 之下 TTS 在啟動期被拒，降到 0.65 三者才共存（**閒置常駐**，同時推論未測）。各服務實佔與量測的限制見 #31。
 
 ### Hotword（單一扁平清單）
 

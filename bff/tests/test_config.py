@@ -123,7 +123,7 @@ def _compose_env_by_service(variable: str) -> dict[str, str]:
     "flag", ["--max-model-len", "--max-num-seqs", "--gpu-memory-utilization"]
 )
 def test_vllm_memory_params_are_set_explicitly(flag):
-    # **這條測的是「有沒有被選擇過」，不是值本身**；取值依據見 HANDOFF.md 的 2.4。
+    # **這條測的是「有沒有被選擇過」，不是值本身**；取值依據見 .env.example。
     #
     # #35 的根因是沒人選過的預設值（nginx 的 60 秒）成了系統的實際上限。同一個失效模式在
     # 此更隱蔽：這三個值寫在 image 內的上游腳本裡，連 grep 都找不到。

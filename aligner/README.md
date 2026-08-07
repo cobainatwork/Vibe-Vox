@@ -145,7 +145,7 @@ ADR-0004 記 VoxCPM2 約需 8 GiB，但**那是估算值而非實測**。餘裕 
 
 上表寫於 2026-08-04，當時 vLLM 的 `gpu_memory_utilization` **從未被顯式設定**、跑在上游 `start_server.py` 的預設 0.8，而 ADR-0001 一直假設 0.55–0.6，故 vLLM 多吃約 10 GB。aligner 反而比估算少用 1–2 GB。
 
-2026-08-05 三個記憶體參數已搬到 `docker-compose.yml` 並由 `.env` 覆寫，utilization 調至 0.70。**故上表的餘裕數字已過期**，最新狀態與待確認項見 HANDOFF.md 的 2.4 與 8.2（#31）。
+2026-08-05 三個記憶體參數已搬到 `docker-compose.yml` 並由 `.env` 覆寫，utilization 調至 0.70；2026-08-07 為讓 TTS 起得來再降至 0.65。**故上表的餘裕數字已過期**，歷次量測與待確認項見 #31。
 
 完整的實測對照與後續選項記於 ADR-0004 的 Consequences 與 #31。不屬 #26 的交付範圍。
 
