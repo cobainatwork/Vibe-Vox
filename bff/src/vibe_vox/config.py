@@ -108,8 +108,13 @@ class Settings:
     aligner_base_url: str = field(
         default_factory=_env("VIBE_VOX_ALIGNER_BASE_URL", "http://aligner:9100", str)
     )
-    # 呼叫對齊服務的逾時（秒）。實測 32 段（總音訊 1075 秒）耗時 1.4 秒、日常 2–4 段
-    # 約 0.2 秒（ADR-0004），故 60 秒的餘裕主要用於多段 multipart 的傳輸而非推論。
+    # 對齊的逾時（秒），**所有批次共用的一份預算而非每批各有一份**。實測 32 段（總音訊
+    # 1075 秒）耗時 1.4 秒、日常 2–4 段約 0.2 秒（ADR-0004），故 60 秒的餘裕主要用於多段
+    # multipart 的傳輸而非推論。
+    #
+    # 語義為整體是 `heavy_request_budget()` 的前提：那條算式只加它一次，若它是每批的
+    # 逾時，63 段的會議錄音（預設上限下為 8 批）最壞就要 8 倍，guard 會先於內層觸發並回
+    # 504，逐字稿一併喪失。預算的執行在 `adapters/aligner.py` 的 `_align_batches`。
     aligner_timeout_seconds: float = field(
         default_factory=_env("VIBE_VOX_ALIGNER_TIMEOUT_SECONDS", "60", float)
     )
@@ -161,9 +166,10 @@ class Settings:
     def __post_init__(self) -> None:
         """擋下會讓每個請求都壞掉的設定值。
 
-        batch size 小於 1 時分批會在執行期拋 `ValueError`，而端點只攔對齊服務的兩種
-        例外，故它會冒成 500 使**逐字稿一併失效**，正是 ADR-0004 第二層降級要避免的
-        結果。設定錯誤在啟動時就喊出來，而不是等每個辨識請求都壞掉才被發現。
+        batch size 小於 1 時分批會在執行期拋 `ValueError`。對齊的降級只涵蓋「服務給不出
+        結果」（那些已由 `AlignerClient.align` 轉成 omission），設定錯誤不在其中，故它會
+        冒成 500 使**逐字稿一併失效**，正是 ADR-0004 第二層降級要避免的結果。設定錯誤在
+        啟動時就喊出來，而不是等每個辨識請求都壞掉才被發現。
         """
         if self.aligner_max_batch_items < 1:
             raise ValueError(

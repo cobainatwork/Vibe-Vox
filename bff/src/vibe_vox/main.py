@@ -8,19 +8,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
 from vibe_vox.adapters.aligner import HttpAlignerClient
-from vibe_vox.adapters.base import AlignerClient, AsrClient, TtsClient
+from vibe_vox.adapters.base import (
+    AlignerClient,
+    AsrClient,
+    AsrTimeout,
+    AsrUnavailable,
+    TtsClient,
+    TtsTimeout,
+    TtsUnavailable,
+)
 from vibe_vox.adapters.stub import (
     DEFAULT_STUB_ASR_RESULT,
     StubAlignerClient,
     StubAsrClient,
     StubTtsClient,
 )
-from vibe_vox.adapters.vllm_asr import AsrTimeout, AsrUnavailable, VllmAsrClient
-from vibe_vox.adapters.vllm_omni_tts import (
-    TtsTimeout,
-    TtsUnavailable,
-    VllmOmniTtsClient,
-)
+from vibe_vox.adapters.vllm_asr import VllmAsrClient
+from vibe_vox.adapters.vllm_omni_tts import VllmOmniTtsClient
 from vibe_vox.api.admin_hotwords import router as admin_hotwords_router
 from vibe_vox.api.admin_voices import InvalidVoiceName, router as admin_voices_router
 from vibe_vox.api.asr import InvalidExtraTerms, router as asr_router

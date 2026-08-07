@@ -89,6 +89,34 @@ def test_slice_returns_empty_when_start_beyond_audio(tmp_path):
     assert _read_frames(result.wav) == []
 
 
+def test_slice_end_reports_what_was_actually_read(tmp_path):
+    # end 自實際讀到的 frame 數導出而非由請求的 end 夾限：末段的請求區間超出檔尾時
+    # 兩者不同，而落界判準要的是真正有音訊的範圍。
+    src = _write_wav(tmp_path / "a.wav", frames=3 * _RATE)
+
+    within = slice_wav(src, start=1.0, end=2.0)
+    past_end = slice_wav(src, start=2.5, end=3.5)
+
+    assert (within.start, within.end) == (1.0, 2.0)
+    assert (past_end.start, past_end.end) == (2.5, 3.0)  # 請求到 3.5，檔只到 3.0
+
+
+def test_bounds_widen_to_millisecond_grid(tmp_path):
+    # start／end 落在 frame 格點上，而對齊結果的時間戳取三位小數，兩者的格點不同：
+    # 恰好對到切片邊界的字在四捨五入後會跑到範圍外，使正常段落被落界判準攔下。向外
+    # 取整讓範圍涵蓋所有能捨入到它的時間戳。
+    #
+    # 24000 Hz 下第 24001 個 frame 落在 1.00004166… 秒，是這個錯位的最小可重現形式。
+    src = _write_wav(tmp_path / "a.wav", frames=3 * 24000, rate=24000)
+
+    result = slice_wav(src, start=1.0000417, end=2.0000417)
+
+    assert result.start > 1.0 and result.end > 2.0  # 實際邊界不在毫秒格點上
+    lower, upper = result.bounds
+    assert (lower, upper) == (1.0, 2.001)  # 下界向下、上界向上
+    assert lower <= round(result.start, 3) and round(result.end, 3) <= upper
+
+
 def test_slice_preserves_audio_parameters(tmp_path):
     # aligner 端以 libsndfile 讀 header 取取樣率、且不重取樣（align 內部才轉 16k）。
     # header 若寫死或漏帶，秒數換算即錯，時間戳整段失真而不報錯。

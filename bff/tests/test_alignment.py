@@ -6,7 +6,7 @@
 
 import logging
 
-from vibe_vox.adapters.base import Segment, Word
+from vibe_vox.adapters.base import Omission, Segment, SegmentAlignment, Word
 from vibe_vox.alignment import find_word_defect, merge_alignment
 
 
@@ -15,6 +15,31 @@ def _words(count: int, *, start: float = 0.0, each: float = 0.25) -> list[Word]:
     return [
         Word(Text="字", Start=round(start + i * each, 3), End=round(start + (i + 1) * each, 3))
         for i in range(count)
+    ]
+
+
+def _from_aligner(
+    segments: list[Segment],
+    words_per_segment: list[list[Word]],
+    *,
+    audio_duration: float,
+    buffer: float = 0.5,
+) -> list[SegmentAlignment]:
+    """造 adapter 會回報的形狀：每段的字級結果配上它實際被切出的時間範圍。
+
+    範圍在此由段界與 buffer 推得**純為造測試資料**。正式路徑上它來自
+    HttpAlignerClient 的實際夾限（見 `Slice`），本模組不再自行計算——那正是這組測試
+    以前得手寫 bounds 字面值的原因。
+    """
+    return [
+        SegmentAlignment(
+            words=words,
+            bounds=(
+                max(0.0, segment.Start - buffer),
+                min(audio_duration, segment.End + buffer),
+            ),
+        )
+        for segment, words in zip(segments, words_per_segment, strict=True)
     ]
 
 
@@ -204,26 +229,62 @@ def test_empty_words_fail_check():
     assert find_word_defect([], span=4.0, bounds=(0.0, 4.0)) is not None
 
 
-def test_merge_skips_per_segment_logging_when_the_aligner_failed(caplog):
+def test_merge_logs_one_line_for_segments_omitted_for_the_same_reason(caplog):
     # 對齊服務整體失敗時全段的 words 都是空的，逐段記「字級清單為空」會產生 N 條完全
-    # 相同的訊息（#36 實測 63 條），把端點層那條真正的原因推出畫面：診斷時要往上翻 63
-    # 行才看得到（#37）。段落仍須標記為未對齊，只是不重複記錄同一件事。
+    # 相同的訊息（#36 實測 63 條），把真正的原因推出畫面：診斷時要往上翻 63 行才看得到
+    # （#37）。同因合成一條，段號留著供對照；段落仍照常標記為未對齊。
     segments = [
         Segment(Start=0.0, End=1.0, Speaker="0", Content="你好"),
         Segment(Start=1.0, End=2.0, Speaker="0", Content="再見"),
     ]
+    reason = Omission(
+        "batch_failed", "第 1／1 批對齊失敗：HTTP 503 ALIGNER_NOT_READY：尚未就緒。"
+    )
+    alignments = [
+        SegmentAlignment(words=[], bounds=(0.0, 1.5), omission=reason),
+        SegmentAlignment(words=[], bounds=(0.5, 2.0), omission=reason),
+    ]
 
     with caplog.at_level(logging.WARNING, logger="vibe_vox.alignment"):
-        aligned, _ = merge_alignment(
-            segments,
-            [[], []],
-            audio_duration=2.0,
-            slice_buffer=0.5,
-            aligner_failed=True,
-        )
+        aligned, _ = merge_alignment(segments, alignments, audio_duration=2.0)
 
-    assert caplog.text == ""
+    assert len(caplog.records) == 1
+    assert "ALIGNER_NOT_READY" in caplog.text
+    assert "第 1、2 段" in caplog.text  # 哪幾段受影響仍看得到
+    assert "字級清單為空" not in caplog.text  # 不再以更空洞的描述覆蓋真原因
     assert [s.aligned for s in aligned] == [False, False]
+
+
+def test_merge_keeps_distinct_omission_reasons_apart(caplog):
+    # 跨批不保證同因：服務在兩次請求之間被重啟時可能一批逾時、另一批回 503。分組鍵是
+    # 原因字串本身，故不同原因各自成一條，合成一條會丟掉其中一個（#37）。
+    segments = [
+        Segment(Start=0.0, End=1.0, Speaker="0", Content="你好"),
+        Segment(Start=1.0, End=2.0, Speaker="", Content="[Silence]"),
+    ]
+    alignments = [
+        SegmentAlignment(
+            words=[],
+            bounds=(0.0, 1.5),
+            omission=Omission(
+                "batch_failed", "第 1／2 批對齊失敗：逾時（對齊的 60 秒預算內未回應）"
+            ),
+        ),
+        SegmentAlignment(
+            words=[],
+            bounds=(0.5, 2.0),
+            omission=Omission(
+                "non_speech_marker", "非語音標記段（[Silence]），未送出對齊"
+            ),
+        ),
+    ]
+
+    with caplog.at_level(logging.WARNING, logger="vibe_vox.alignment"):
+        merge_alignment(segments, alignments, audio_duration=2.0)
+
+    assert len(caplog.records) == 2
+    assert "逾時" in caplog.text
+    assert "非語音標記段" in caplog.text
 
 
 def test_merge_still_logs_empty_words_when_the_aligner_succeeded(caplog):
@@ -233,7 +294,11 @@ def test_merge_still_logs_empty_words_when_the_aligner_succeeded(caplog):
     segments = [Segment(Start=0.0, End=1.0, Speaker="0", Content="。")]
 
     with caplog.at_level(logging.WARNING, logger="vibe_vox.alignment"):
-        merge_alignment(segments, [[]], audio_duration=1.0, slice_buffer=0.5)
+        merge_alignment(
+            segments,
+            _from_aligner(segments, [[]], audio_duration=1.0),
+            audio_duration=1.0,
+        )
 
     assert "empty_words" in caplog.text
 
@@ -251,7 +316,9 @@ def test_merge_recomputes_segment_bounds_from_words():
     ]
 
     aligned, _ = merge_alignment(
-        segments, words, audio_duration=4.204, slice_buffer=0.5
+        segments,
+        _from_aligner(segments, words, audio_duration=4.204),
+        audio_duration=4.204,
     )
 
     assert aligned[0].aligned is True
@@ -273,7 +340,9 @@ def test_merge_degrades_only_the_failing_segment():
         [Word(Text="幾", Start=2.32, End=2.32), Word(Text="乎", Start=2.48, End=2.72)],
     ]
 
-    aligned, _ = merge_alignment(segments, words, audio_duration=4.0, slice_buffer=0.5)
+    aligned, _ = merge_alignment(
+        segments, _from_aligner(segments, words, audio_duration=4.0), audio_duration=4.0
+    )
 
     assert aligned[0].aligned is True
     assert (aligned[0].Start, aligned[0].End) == (0.40, 0.96)
@@ -295,7 +364,9 @@ def test_summary_counts_only_aligned_segments():
         [Word(Text="幾", Start=2.32, End=2.32), Word(Text="乎", Start=2.48, End=2.72)],
     ]
 
-    _, summary = merge_alignment(segments, words, audio_duration=4.5, slice_buffer=0.5)
+    _, summary = merge_alignment(
+        segments, _from_aligner(segments, words, audio_duration=4.5), audio_duration=4.5
+    )
 
     assert summary.audio_duration == 4.5  # 音檔實際總段，非 Segment End 最大值
     assert summary.speech_start == 0.40
@@ -323,7 +394,9 @@ def test_merge_exempts_first_and_last_segment_from_span_check():
     ]
 
     aligned, summary = merge_alignment(
-        segments, words, audio_duration=110.0, slice_buffer=0.5
+        segments,
+        _from_aligner(segments, words, audio_duration=110.0),
+        audio_duration=110.0,
     )
 
     assert [s.aligned for s in aligned] == [True, True, True]
@@ -341,7 +414,9 @@ def test_merge_never_aligns_zero_length_segment():
     ]
 
     aligned, summary = merge_alignment(
-        segments, words, audio_duration=30.0, slice_buffer=0.5
+        segments,
+        _from_aligner(segments, words, audio_duration=30.0),
+        audio_duration=30.0,
     )
 
     assert aligned[0].aligned is False
@@ -352,7 +427,7 @@ def test_merge_never_aligns_zero_length_segment():
 def test_summary_is_structurally_complete_when_no_speech():
     # 學員全程未發話（音訊有效但無語音，docs/api/asr.md §6）：欄位結構完整回傳、
     # 值為 null 或 0，不報錯也不省略欄位。評分端據此視為零分或無效作答。
-    aligned, summary = merge_alignment([], [], audio_duration=12.5, slice_buffer=0.5)
+    aligned, summary = merge_alignment([], [], audio_duration=12.5)
 
     assert aligned == []
     assert summary.audio_duration == 12.5  # 音檔仍有長度

@@ -15,12 +15,13 @@ from pathlib import Path
 import httpx
 import pytest
 
-from vibe_vox.adapters.base import CONTRACT_SPEC, Utterance
-from vibe_vox.adapters.vllm_omni_tts import (
+from vibe_vox.adapters.base import (
+    CONTRACT_SPEC,
     TtsTimeout,
     TtsUnavailable,
-    VllmOmniTtsClient,
+    Utterance,
 )
+from vibe_vox.adapters.vllm_omni_tts import VllmOmniTtsClient
 from vibe_vox.audio.wav import PcmAudio
 
 need_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="需要 ffmpeg")

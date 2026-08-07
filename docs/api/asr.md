@@ -234,7 +234,7 @@ BFF 有一層 Origin 防護（`OriginGuardMiddleware`），規則是「來源存
 | 503 | `TOO_MANY_REQUESTS` | 重量級請求達併發上限（預設 8）。**不排隊，直接 load-shed**，可重試 |
 | 504 | `ASR_TIMEOUT` | 模型服務回應逾時（預設 300 秒，`VIBE_VOX_ASR_TIMEOUT_SECONDS`）。**這是音檔長度的實際上限所在**，見 §3.3 |
 | 504 | `TRANSCODE_TIMEOUT` | ffmpeg 轉碼逾時（預設 60 秒） |
-| 504 | `REQUEST_TIMEOUT` | 總體護欄逾時（涵蓋轉碼、辨識與對齊，上限為三者之和，預設 420 秒） |
+| 504 | `REQUEST_TIMEOUT` | 總體護欄逾時（涵蓋轉碼、辨識與對齊，上限為三者之和再乘 1.2 的餘裕，預設 504 秒） |
 
 錯誤形狀一律為：
 

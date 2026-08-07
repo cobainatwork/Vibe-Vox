@@ -9,13 +9,9 @@ import wave
 
 from fastapi.testclient import TestClient
 
-from vibe_vox.adapters.base import CONTRACT_SPEC
+from vibe_vox.adapters.base import CONTRACT_SPEC, TtsTimeout, TtsUnavailable
 from vibe_vox.adapters.stub import StubTtsClient
-from vibe_vox.adapters.vllm_omni_tts import (
-    TtsTimeout,
-    TtsUnavailable,
-    VllmOmniTtsClient,
-)
+from vibe_vox.adapters.vllm_omni_tts import VllmOmniTtsClient
 from vibe_vox.audio.wav import PcmAudio
 from vibe_vox.config import Settings
 from vibe_vox.main import create_app

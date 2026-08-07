@@ -37,7 +37,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel
 
-from vibe_vox.adapters.base import Segment, Word
+from vibe_vox.adapters.base import Omission, Segment, SegmentAlignment, Word
 
 logger = logging.getLogger(__name__)
 
@@ -130,46 +130,68 @@ class AlignmentSummary(BaseModel):
 
 def merge_alignment(
     segments: list[Segment],
-    words_per_segment: list[list[Word]],
+    alignments: list[SegmentAlignment],
     *,
     audio_duration: float,
-    slice_buffer: float,
-    aligner_failed: bool = False,
 ) -> tuple[list[AlignedSegment], AlignmentSummary]:
     """合併對齊結果、逐段檢查、重算段界，並算出四個彙總數字。
 
     未通過檢查的段落回退切點時間戳並標記，其餘段照常——ADR-0004 的兩層降級之
     第一層。
 
-    `aligner_failed` 表示對齊服務整體不可得（不可用或逾時）。**刻意不叫「上游」**：本
-    模組同時討論 ASR 模型的輸出品質，那個詞在此會歧義成 VibeVoice。此時全段的 words
-    必然為空，逐段記錄只會產生 N 條完全相同的訊息（#36 實測 63 條）而把端點層那條真正
-    的原因推出畫面。段落仍照常標記為未對齊，只是不重複記錄同一件事（#37）。
+    帶 omission 的段落跳過檢查：adapter 已經說明它為何沒有字，再套一次判準只會得到
+    「字級清單為空」這種比原因更空洞的描述。它們的原因按內容分組後合記（見
+    `_log_omissions`），故服務整體失敗時不會產生 N 條相同訊息（#36 實測 63 條）而把
+    真正的原因推出畫面（#37）。
     """
     last = len(segments) - 1
     merged: list[AlignedSegment] = []
+    omitted: dict[Omission, list[int]] = {}
     # strict：筆數不符即 Protocol 被違約。靜默截短會讓尾端 Segment 從回應消失，使
     # segments 與 transcription_only 互相矛盾，比直接失敗更難察覺。
-    for index, (segment, words) in enumerate(
-        zip(segments, words_per_segment, strict=True)
+    for index, (segment, alignment) in enumerate(
+        zip(segments, alignments, strict=True)
     ):
+        if alignment.omission is not None:
+            omitted.setdefault(alignment.omission, []).append(index + 1)
+            merged.append(_with_alignment(segment, [], aligned=False))
+            continue
         defect = _find_segment_defect(
             segment,
-            words,
+            alignment.words,
             span_applies=0 < index < last,
-            audio_duration=audio_duration,
-            slice_buffer=slice_buffer,
+            bounds=alignment.bounds,
         )
-        if defect is not None and not aligner_failed:
+        if defect is not None:
             # warning 而非 info：本專案無 logging 設定，info 會被靜默丟棄（見模組
-            # docstring）。對齊服務可用時逐段都記，包含空清單，因為那可能是「該段全是
-            # 標點」或 adapter 剔除了退化段落與非語音標記段這種真正需要知道的情形
-            # （#34、#38）。服務整體失敗則全段同因，由端點層記一條即可（#37）。
+            # docstring）。送出且有回應的段落逐段都記，包含空清單，因為那可能是
+            # 「該段全是標點」這種真正需要知道的情形（#34）。
             logger.warning(
                 "第 %d 段未通過對齊檢查（%s）：%s", index + 1, defect.code, defect.detail
             )
-        merged.append(_with_alignment(segment, words, aligned=defect is None))
+        merged.append(_with_alignment(segment, alignment.words, aligned=defect is None))
+    _log_omissions(omitted)
     return merged, _summarize(merged, audio_duration=audio_duration)
+
+
+# 合記一條時最多列出幾個段號。夠多到能認出是哪幾段、又不會讓 57 段同因時整行都是數字
+# 而把原因本身擠出視線。
+_MAX_LISTED_SEGMENTS = 8
+
+
+def _log_omissions(omitted: dict[Omission, list[int]]) -> None:
+    """把 adapter 給的原因分組記下，一組一條。
+
+    分組鍵是整個 Omission，故同一批失敗的段落自動合成一條、不同批的各自留著——服務在
+    兩次請求之間被重啟時可能一批逾時、另一批回 503，合成一條會丟掉其中一個。
+    """
+    for omission, indexes in omitted.items():
+        listed = "、".join(str(i) for i in indexes[:_MAX_LISTED_SEGMENTS])
+        if len(indexes) > _MAX_LISTED_SEGMENTS:
+            listed = f"{listed} 等 {len(indexes)} 段"
+        logger.warning(
+            "第 %s 段未取得字級結果（%s）：%s", listed, omission.code, omission.detail
+        )
 
 
 def _find_segment_defect(
@@ -177,8 +199,7 @@ def _find_segment_defect(
     words: list[Word],
     *,
     span_applies: bool,
-    audio_duration: float,
-    slice_buffer: float,
+    bounds: tuple[float, float],
 ) -> Defect | None:
     """找出該段對齊的缺陷；可信則回 `None`。
 
@@ -203,11 +224,7 @@ def _find_segment_defect(
             f"段落本身為零長度（Start 與 End 同為 {segment.Start:.2f}）",
         )
     return find_word_defect(
-        words,
-        span=span if span_applies else None,
-        bounds=_bounds(
-            segment, audio_duration=audio_duration, slice_buffer=slice_buffer
-        ),
+        words, span=span if span_applies else None, bounds=bounds
     )
 
 
@@ -287,20 +304,6 @@ def _scan_words(
         previous_end = word.End
 
     return structural, implausible
-
-
-def _bounds(
-    segment: Segment, *, audio_duration: float, slice_buffer: float
-) -> tuple[float, float]:
-    """該段切片在原音檔涵蓋的時間範圍，與 #27 的切片夾限一致。
-
-    含 buffer 是必要的：邊界字可能落在 buffer 區內（切點非發音邊界），以段界本身
-    為判準會使每個邊界字都讓整段被誤判。
-    """
-    return (
-        max(0.0, segment.Start - slice_buffer),
-        min(audio_duration, segment.End + slice_buffer),
-    )
 
 
 def _with_alignment(

@@ -2,23 +2,19 @@
 
 回合制批次辨識。回應為消費端契約形狀（不套管理平面的 {data} 信封，見 ADR-0003）。
 
-#28 起附字級時間戳（ADR-0004）。對齊是附加功能，其失效不得使逐字稿一併不可得，
-故對齊服務的例外在此攔下並降級，**不往上映射成 502／504**。
+#28 起附字級時間戳（ADR-0004）。對齊是附加功能，其失效不得使逐字稿一併不可得——該
+降級由 `AlignerClient.align` 保證（它不拋出，逐段以 omission 說明原因），故本層沒有
+對齊相關的例外處理，也**不往上映射成 502／504**。
 """
 
 import json
-import logging
-from pathlib import Path
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 
-from vibe_vox.adapters.aligner import AlignerTimeout, AlignerUnavailable
-from vibe_vox.adapters.base import AlignerClient, AsrClient, Segment, Word
+from vibe_vox.adapters.base import AlignerClient, AsrClient
 from vibe_vox.alignment import merge_alignment
 from vibe_vox.audio.slice import wav_duration
 from vibe_vox.hotword_text import compile_context, enforce_context_budget, sanitize_text
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -43,27 +39,6 @@ def _parse_extra_terms(raw: str | None) -> list[str]:
     if not isinstance(parsed, list) or not all(isinstance(x, str) for x in parsed):
         raise InvalidExtraTerms
     return [t for t in (sanitize_text(x) for x in parsed) if t]
-
-
-async def _align_or_degrade(
-    aligner: AlignerClient, wav: Path, segments: list[Segment]
-) -> tuple[list[list[Word]], bool]:
-    """取字級時間戳，並回報對齊服務是否整體失敗。
-
-    服務不可用或逾時則回空清單，交由 merge_alignment 標記未對齊。這是 ADR-0004 兩層
-    降級的第二層。**刻意不重試**：對齊是附加功能，為它延長請求會拖累逐字稿的回應
-    時間，而 aligner 服務端本身已對併發採 load-shed。
-
-    第二個回傳值供 merge_alignment 判斷該不該逐段記錄：全段同因時逐段記只會產生 N 條
-    相同訊息，把這裡記的原因推出畫面（#37）。
-    """
-    try:
-        return await aligner.align(wav, segments), False
-    except (AlignerTimeout, AlignerUnavailable) as exc:
-        # warning 而非 info：本專案無 logging 設定，info 會被靜默丟棄。%r 保留例外型別
-        # 與其攜帶的服務端錯誤碼（#37），兩者都是診斷的必要資訊。
-        logger.warning("對齊服務不可用，全段降級為未對齊：%r", exc)
-        return [[] for _ in segments], True
 
 
 @router.post("/api/asr/transcribe")
@@ -94,16 +69,12 @@ async def transcribe(
         ) as wav:
             result = await asr.transcribe(wav, context=context)
             audio_duration = wav_duration(wav)
-            words, aligner_failed = await _align_or_degrade(
-                aligner, wav, result.segments
-            )
+            # 對齊不可得不會拋出：降級是 AlignerClient 的保證，端點層無須攔截，
+            # 也無從攔截——降級後仍要每段的切片範圍，而那只有 adapter 算得出來。
+            alignments = await aligner.align(wav, result.segments)
 
     segments, alignment = merge_alignment(
-        result.segments,
-        words,
-        audio_duration=audio_duration,
-        slice_buffer=settings.aligner_slice_buffer_seconds,
-        aligner_failed=aligner_failed,
+        result.segments, alignments, audio_duration=audio_duration
     )
     return result.model_dump() | {
         "segments": [s.model_dump() for s in segments],
