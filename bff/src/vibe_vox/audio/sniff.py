@@ -1,8 +1,12 @@
 """音檔容器型別判定：僅依標頭 magic numbers，不信副檔名（設計 §2.1）。
 
 sniffer 只做「容器層」保守判定，作為擋掉明顯非音訊檔的廉價前置閘；真正的解碼
-驗證交給 ffmpeg。所有允許格式的 magic 皆落在檔首前 12 bytes 內，故不需大 buffer。
+驗證交給 ffmpeg。所有允許格式的 magic 皆落在檔首前 HEADER_BYTES 內，故不需大 buffer。
 """
+
+# 判型所需的檔首位元組數。由本模組擁有而非各呼叫端各寫一次 12：這個數字是 magic 的
+# 分布決定的，加一種容器就可能要改，而散在外面的那幾份不會跟著動。
+HEADER_BYTES = 12
 
 
 def detect_audio_format(header: bytes) -> str | None:

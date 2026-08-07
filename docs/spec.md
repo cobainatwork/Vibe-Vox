@@ -92,7 +92,9 @@ Vibe-Vox 是一個 ASR/TTS 後端服務，同時服務兩類消費者。**消費
 - 模型呼叫藏在兩個 adapter 介面後面：`AsrClient` 與 `TtsClient`。BFF 只依賴這兩個介面，實作負責與 vLLM／vLLM-Omni 溝通。此介面同時是唯一的測試 stub 邊界。
 - ASR 辨識走 vLLM 的 `/v1/chat/completions`（傳 audio 與 context prompt，回傳 Who/When/What 結構化 JSON）。不使用 `/v1/audio/transcriptions`，因其尚未實作且標準 schema 會弄丟 Speaker。
 - TTS 合成走 vLLM-Omni 的 OpenAI 相容 `/v1/audio/speech`，服務以 `vllm serve openbmb/VoxCPM2 --omni` 啟動。
-- 參考音經擴充欄位 `ref_audio` 以 `data:` base64 傳入。不用 `file://`，因其需 server 開 `--allowed-local-media-path`，會擴大容器的檔案系統暴露面。參考音時長的伺服器端限制為 1.0 至 30.0 秒，adapter 須在送出前自行驗，因為超界時端點回的是 `ValueError` 文字而非本專案的錯誤碼。
+- 參考音經擴充欄位 `ref_audio` 以 `data:` base64 傳入。不用 `file://`，因其需 server 開 `--allowed-local-media-path`，會擴大容器的檔案系統暴露面。
+- 參考音時長的伺服器端限制為 1.0 至 30.0 秒，超界時端點回的是 `ValueError` 文字而非本專案的錯誤碼。**這條限制在建立音色時驗，不在 adapter 送出前驗**：參考音在建立時就固定了，驗一次就夠，而只有建立時的操作者能修正它——合成時失敗只會讓消費端依契約重試一個永久失敗。可用性（容器合法、可解碼、時長合規）因此是 Voice 的不變量。既有音色不受該不變量涵蓋，故音色清單逐列回報 `unusable_reason`，合成端點以**同一組判準**做 backstop 並回 409 `VOICE_UNUSABLE`——兩處各寫一組判準會長出「清單說不可用而合成照樣送出」的組合。
+- 參考音的大小上限與辨識用上傳解耦（30 秒的上界容不下 200 MiB 的檔案）。合成路徑會把整個參考音讀進記憶體並編成 base64，故該讀取不得跑在 event loop 上——否則一個大參考音會讓每一次合成都停住整個 BFF。
 - **Instruction 以 `(...)` 前綴寫進 `input`，不經任何欄位。** `instructions` 與 `task_type` 對 VoxCPM2 不生效且不報錯——送了會得到 HTTP 200 加一段未套用該風格的音訊。BFF 不送這兩個欄位。
 - 一次 request 只承載一種風格，逐句不同語氣即逐句一次呼叫。切句與組風格前綴在 `TtsClient` 之上完成，`synthesize()` 收已切好的句子與各自風格，中文斷句規則不進 HTTP client。
 - 端點回 48 kHz mono，adapter 降為消費端契約要求的 24 kHz／mono／16-bit。

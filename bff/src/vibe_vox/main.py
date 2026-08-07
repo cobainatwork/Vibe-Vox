@@ -36,6 +36,7 @@ from vibe_vox.api.tts import (
     StreamUnsupported,
     UnsupportedModel,
     UnsupportedResponseFormat,
+    VoiceUnusable,
     router as tts_router,
 )
 from vibe_vox.audio.errors import (
@@ -45,6 +46,7 @@ from vibe_vox.audio.errors import (
     UnsupportedAudioFormat,
 )
 from vibe_vox.audio.intake import AudioIntake
+from vibe_vox.audio.reference import RefAudioUnusable
 from vibe_vox.config import Settings
 from vibe_vox.files.cleanup import cleanup_expired_temp_files, sweep_orphan_voice_files
 from vibe_vox.hotword_io import ImportLimitExceeded, ImportParseError
@@ -229,6 +231,32 @@ def create_app(
         )
 
     app.add_exception_handler(InvalidVoiceName, _on_invalid_voice_name)
+
+    async def _on_invalid_ref_audio(request, exc: RefAudioUnusable) -> JSONResponse:
+        # 訊息由例外自己帶而非在此寫死：操作者要看到實際時長與允許範圍才知道要裁到多短，
+        # 而那些值只有判定的那一層知道（audio/reference.py）。
+        return JSONResponse(
+            status_code=400,
+            content={"error": {"code": "INVALID_REF_AUDIO", "message": str(exc)}},
+        )
+
+    app.add_exception_handler(RefAudioUnusable, _on_invalid_ref_audio)
+
+    async def _on_voice_unusable(request, exc: VoiceUnusable) -> JSONResponse:
+        # 帶上具體原因（超界的實際秒數／檔案讀不到）：消費端能做的只有換音色，但這條訊息
+        # 是排查時唯一的線索，而籠統的一句話會讓人以為是模型服務的問題。
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": {
+                    "code": "VOICE_UNUSABLE",
+                    "message": f"音色的參考音無法使用：{exc.reason}"
+                    "重試同一個音色不會成功，請改用其他音色並通知操作者。",
+                }
+            },
+        )
+
+    app.add_exception_handler(VoiceUnusable, _on_voice_unusable)
 
     async def _on_input_too_long(request, exc: InputTooLong) -> JSONResponse:
         return JSONResponse(

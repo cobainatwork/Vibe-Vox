@@ -20,6 +20,10 @@ Vibe-Vox 對消費者 AI_practise（智能陪練平台）提供 REST 契約：AS
 - TTS 串流回應納入範圍（第一音塊就緒即播，降低對話感知延遲）。**實作狀態（#6，2026-08-06）：尚未實作**，`POST /api/tts/speech` 帶 `stream: true` 回 400 `STREAM_UNSUPPORTED`。本決策未撤回——串流仍在範圍內，只是還沒到位。回一個明確的 400 而非靜默退回非串流，是為了不讓依 `docs/api/tts.md` §5.4 實作 chunk 閒置逾時的 provider 把正常的回合判成失敗。首音延遲的目標值待 #17。
 - 若未來需要邊講邊出的即時 partial ASR（live caption／barge-in），須改用真正的串流 ASR 模型並重新評估傳輸層。
 - 消費端形狀為約束性：Hotwords 對消費端維持 `{id, word}`；TTS wav 輸出須 24kHz／mono／16-bit 以供消費端剝頭成 PCM。
+- **TTS 於 #44／#45 新增 409 `VOICE_UNUSABLE`**（向後相容——既有錯誤碼的觸發條件與回應形狀不變）：音色仍在 `GET /api/tts/voices` 的清單裡，但它的參考音在伺服器上不可用（讀不到，或時長超出模型端強制的 1.0 至 30.0 秒）。
+
+  **消費端須新增一條分支**：與 404 `VOICE_NOT_FOUND` 不同，重拉清單仍會看到這個音色，故正確處置是改用其他音色並通知操作者，重試同一個音色永遠不會成功。這個碼取代的是先前的行為——超界的參考音在模型端失敗後只能翻成 502 `TTS_UNAVAILABLE`，而該碼被標為可重試，消費端會依契約退避重試一個永久失敗。完整敘述見 `docs/api/tts.md` §3 與 §6。
+
 - **ASR 回應於 #28 擴充字級對齊欄位**（ADR-0004 的連動項，向後相容——既有欄位形狀與值不變）：`segments[]` 加 `aligned: bool` 與 `words: [{Text, Start, End}]`，根層加 `alignment: {audio_duration, speech_start, speech_end, aligned_duration}`。完整形狀見 `docs/api/asr.md` §4.4。
 
   三項對消費端有實質影響的性質：

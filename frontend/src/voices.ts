@@ -11,6 +11,9 @@ export type Voice = {
   ref_audio_path: string;
   ref_text: string | null;
   instruct: string | null;
+  // 參考音不可用的原因（可用則 null）。由後端逐列量測，不是 voices 表的欄位：
+  // 建立時的驗證只對新音色生效，既有音色可能超界或參考音已遺失。
+  unusable_reason: string | null;
   created_at: string;
   updated_at: string;
 };

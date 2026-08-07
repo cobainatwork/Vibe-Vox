@@ -61,10 +61,19 @@ class Settings:
         default_factory=_env("VIBE_VOX_MAX_CONCURRENT_HEAVY_REQUESTS", "8", int)
     )
     # 音檔上傳單檔上限（bytes）；超過回 413 語意。200 MiB 容納長會議錄音。
-    # **這個值同時被 Voice clone 的參考音上傳沿用**（api/admin_voices.py），而參考音
-    # 的合理上限是數 MiB——兩者解耦見 #44。
+    # **只涵蓋辨識用的上傳**；參考音走 voice_ref_audio_max_bytes。
     audio_max_bytes: int = field(
         default_factory=_env("VIBE_VOX_AUDIO_MAX_BYTES", "209715200", int)
+    )
+    # 音色參考音的單檔上限（bytes），與辨識用上傳分開。
+    #
+    # 參考音的時長上界是 30 秒（audio/reference.py），故 32 MiB 已容得下最壞情況的
+    # 未壓縮來源（192 kHz／16-bit／立體聲 30 秒約 23 MB）。**沿用 audio_max_bytes 的
+    # 200 MiB 是個實質缺陷**：合成路徑會把整個參考音讀進記憶體並編成 base64（膨脹
+    # 4/3 倍）送給模型端，200 MiB 的參考音因此讓每一次合成都在 event loop 內同步處理
+    # 267 MiB，期間整個 BFF（含 /api/health 與所有 ASR 請求）停住。
+    voice_ref_audio_max_bytes: int = field(
+        default_factory=_env("VIBE_VOX_VOICE_REF_AUDIO_MAX_BYTES", "33554432", int)
     )
     # ASR 目標取樣率：對齊官方 vllm_plugin/inputs.py，該處三度寫死 24000
     # （load_audio 的 target_sr、load_audio_bytes_use_ffmpeg、duration 換算）。

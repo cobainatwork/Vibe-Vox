@@ -11,6 +11,7 @@ docs/superpowers/specs/2026-08-05-voxcpm2-serving-transport.md），三項與直
   但模型語意上忽略它；音色身分完全由 ref_audio 決定。
 """
 
+import asyncio
 import base64
 from pathlib import Path
 
@@ -23,7 +24,7 @@ from vibe_vox.adapters.base import (
     Utterance,
 )
 from vibe_vox.audio.errors import TranscodeError, TranscodeTimeout
-from vibe_vox.audio.sniff import detect_audio_format
+from vibe_vox.audio.sniff import HEADER_BYTES, detect_audio_format
 from vibe_vox.audio.transcode import resample_wav_to_pcm
 from vibe_vox.audio.wav import InvalidWav, PcmAudio, read_pcm, wrap_pcm
 
@@ -74,14 +75,14 @@ def _data_url(path: Path) -> str:
     file:// 需要 server 開 --allowed-local-media-path，會讓 vLLM 容器能讀取我方掛載
     的任意路徑；data: 沒有這個暴露面。
 
-    **不驗參考音時長。** 端點強制 1.0s ≤ 時長 ≤ 30.0s，超界會回 ValueError 的文字而
-    非音訊，在此表現為 502 TTS_UNAVAILABLE——而契約 §6 把該碼標為可重試，消費端會退避
-    重試一個永久失敗。正確的防線在建立音色時（一次性、能給操作者可行動的訊息），不是
-    每次合成都算一遍；而參考音可能是六種容器之一，非 wav 要起 ffprobe 才量得到時長。
-    追蹤於 #44。
+    **不驗參考音時長**：那是 Voice 建立時的不變量（audio/reference.py），驗一次就夠，
+    放在此處等於每次合成都算一遍，而那時已經沒有人能修正它。
+
+    **同步函式，呼叫端負責把它移出 event loop。** 讀檔與 base64 編碼都是同步且與檔案大小
+    成正比的工作，跑在 loop 上會讓整個 BFF（含 /api/health 與所有 ASR 請求）停住那段時間。
     """
     raw = path.read_bytes()
-    container = detect_audio_format(raw[:12])
+    container = detect_audio_format(raw[:HEADER_BYTES])
     mime = _AUDIO_MIME.get(container or "", _FALLBACK_MIME)
     return f"data:{mime};base64," + base64.b64encode(raw).decode("ascii")
 
@@ -118,7 +119,12 @@ class VllmOmniTtsClient:
     async def synthesize(
         self, utterances: list[Utterance], *, reference_audio: Path
     ) -> PcmAudio:
-        ref_audio = _data_url(reference_audio)
+        try:
+            ref_audio = await asyncio.to_thread(_data_url, reference_audio)
+        except OSError as exc:
+            # 可讀是呼叫端的前置條件，此處只處理端點檢查與這次讀檔之間的時間差；
+            # 為何要翻譯而不讓它逸出，見 base.py 的 TtsClient.synthesize。
+            raise TtsUnavailable from exc
         parts: list[PcmAudio] = []
         try:
             async with self._client() as client:

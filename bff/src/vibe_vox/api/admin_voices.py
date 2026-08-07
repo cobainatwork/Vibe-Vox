@@ -7,6 +7,7 @@
 落地檔名一律為伺服器生成的 UUID，不由 name 或原始檔名推導（spec 持久化決策）。
 """
 
+import asyncio
 import shutil
 from pathlib import Path
 from uuid import uuid4
@@ -14,7 +15,7 @@ from uuid import uuid4
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from pydantic import BaseModel
 
-from vibe_vox.audio.intake import save_upload
+from vibe_vox.audio.reference import save_reference_audio, unusable_reason
 
 router = APIRouter()
 
@@ -64,10 +65,12 @@ async def create_clone_voice(
     repo = request.app.state.voices
     name = clean_voice_name(name)
 
-    temp = await save_upload(
+    # 走 save_reference_audio 而非 save_upload：參考音的可用性（容器、可解碼、時長）
+    # 是 Voice 的不變量，在此判定一次，合成路徑不再重算（audio/reference.py）。
+    temp = await save_reference_audio(
         _stream(ref_audio),
         temp_dir=settings.temp_dir,
-        max_bytes=settings.audio_max_bytes,
+        max_bytes=settings.voice_ref_audio_max_bytes,
     )
 
     voice_dir = Path(settings.voice_dir)
@@ -93,9 +96,31 @@ async def create_clone_voice(
     return {"data": created}
 
 
+async def _with_usability(voices: list[dict]) -> list[dict]:
+    """為每個音色附上 `unusable_reason`：可用則 None，否則是給操作者看的一句原因。
+
+    **併發量測而非逐列 await。** wav 只讀標頭、不起子進程，但非 wav 的音色各要一次
+    ffprobe（單次上限 30 秒）；序列化的話幾個損壞的音色就能讓這個端點撐過反向代理的
+    逾時，操作者拿到 HTML 錯誤頁而不是清單。
+    """
+    reasons = await asyncio.gather(
+        *(unusable_reason(Path(v["ref_audio_path"])) for v in voices)
+    )
+    return [v | {"unusable_reason": r} for v, r in zip(voices, reasons, strict=True)]
+
+
 @router.get("/api/admin/voices")
 async def list_voices(request: Request) -> dict:
-    return {"data": request.app.state.voices.list()}
+    """音色清單，附帶參考音的可用性。
+
+    建立時的驗證只對新音色生效。該不變量之前建立的音色未經任何檢查，而參考音也可能在
+    建立之後才失效（DB 還原、volume 換掛、人工刪檔）。清單是操作者唯一看得到音色的地方，
+    不標出來的話他只會看到某個音色試聽失敗，而錯誤訊息出現在別的畫面上。
+
+    消費端的 `GET /api/tts/voices` 不帶這個欄位——它的形狀是凍結的契約（ADR-0003），
+    且消費端對此無能為力（它只會在合成時收到 409 `VOICE_UNUSABLE`）。
+    """
+    return {"data": await _with_usability(request.app.state.voices.list())}
 
 
 @router.put("/api/admin/voices/{vid}")

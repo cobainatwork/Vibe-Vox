@@ -91,6 +91,49 @@ def test_speech_unknown_voice_returns_404(tmp_path):
     assert resp.json()["error"]["code"] == "VOICE_NOT_FOUND"
 
 
+def test_speech_with_out_of_range_reference_audio_is_not_reported_as_retryable(tmp_path):
+    """超界的既有音色不能報成可重試的 502。**這是 #44 的原始缺陷本身。**
+
+    模型端對超界的參考音回 ValueError 的文字而非音訊，adapter 只能把它翻成 502
+    TTS_UNAVAILABLE，而契約 §6 把該碼標為可重試——消費端於是依契約退避重試一個永久失敗。
+    建立時的驗證擋不到本票之前建立的音色，故合成路徑的 backstop 要用同一組判準，不能只
+    檢查檔案存在：否則管理平面說某個音色不可用，合成路徑照樣把它送出去。
+    """
+    client = _client(tmp_path)
+    voice = _create_voice(client)
+    # 把參考音換成 40 秒的檔案，等同未經驗證就建立的既有音色。
+    for f in (tmp_path / "voices").iterdir():
+        f.write_bytes(_wav_bytes(40.0))
+
+    resp = client.post("/api/tts/speech", json={"input": "測試", "voice": voice["id"]})
+
+    assert resp.status_code == 409
+    body = resp.json()["error"]
+    assert body["code"] == "VOICE_UNUSABLE"
+    assert "40" in body["message"]  # 訊息要說出實際的問題，否則排查只能靠猜
+
+
+def test_speech_with_unreadable_reference_audio_stays_within_the_contract(tmp_path):
+    """參考音檔在伺服器上讀不到時回契約內的錯誤，不是 500、也不是靜默成功。
+
+    建立時的不變量只涵蓋建立路徑（audio/reference.py）；DB 還原、volume 換掛、人工刪檔
+    都在它之外，而那三者在測試區都會發生。契約 §6 的錯誤表沒有 500 這一列——消費端拿到
+    非契約形狀的回應，它的錯誤處理分支涵蓋不到。
+
+    碼不是可重試的 502：重試同一個音色永遠不會成功，能修的只有操作者。也不是 404——
+    音色還在清單裡，回 404 會讓依契約重拉清單的消費端看到它仍在而再送一次。
+    """
+    client = _client(tmp_path)
+    voice = _create_voice(client)
+    for f in (tmp_path / "voices").iterdir():
+        f.unlink()
+
+    resp = client.post("/api/tts/speech", json={"input": "測試", "voice": voice["id"]})
+
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "VOICE_UNUSABLE"
+
+
 class _FailingTtsClient:
     """合成一律拋指定例外，驗證 adapter 的失敗如何映射成消費端錯誤碼。"""
 

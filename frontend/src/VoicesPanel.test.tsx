@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as tts from "./tts";
@@ -20,6 +20,7 @@ function voice(over: Partial<api.Voice> = {}): api.Voice {
     ref_audio_path: "/data/voices/abc",
     ref_text: null,
     instruct: null,
+    unusable_reason: null,
     created_at: "t",
     updated_at: "t",
     ...over,
@@ -50,6 +51,28 @@ describe("VoicesPanel", () => {
     );
     // 試聽不改動任何資料，不該觸發清單重抓——載入時那一次以外不應該有第二次。
     expect(mockedApi.listVoices).toHaveBeenCalledTimes(1);
+  });
+
+  it("標出參考音不可用的音色，並擋掉一定失敗的試聽", async () => {
+    // 建立時的驗證只對新音色生效。既有音色可能超界或參考音已遺失，而清單是操作者唯一
+    // 看得到音色的地方——不標的話他只會看到試聽失敗，而錯誤訊息長得像整個面板壞了。
+    mockedApi.listVoices.mockResolvedValue([
+      voice({ id: "v1", name: "正常音色" }),
+      voice({
+        id: "v2",
+        name: "超界音色",
+        unusable_reason: "參考音時長 40.0 秒不在允許範圍 1.0 至 30.0 秒內，請裁剪後再上傳。",
+      }),
+    ]);
+
+    render(<VoicesPanel />);
+
+    const broken = (await screen.findByText("超界音色")).closest("tr")!;
+    expect(within(broken).getByText(/參考音時長 40.0 秒/)).toBeInTheDocument();
+    expect(within(broken).getByRole("button", { name: "試聽" })).toBeDisabled();
+
+    const ok = screen.getByText("正常音色").closest("tr")!;
+    expect(within(ok).getByRole("button", { name: "試聽" })).toBeEnabled();
   });
 
   it("沒有音色時說明系統不附任何音色", async () => {

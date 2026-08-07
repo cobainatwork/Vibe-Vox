@@ -158,7 +158,13 @@ export function VoicesPanel() {
                       onChange={(e) => setRenameTo(e.target.value)}
                     />
                   ) : (
-                    v.name
+                    <>
+                      {v.name}
+                      {/* 原因寫在該列而非頁首：操作者要知道是哪一個音色不能用。 */}
+                      {v.unusable_reason && (
+                        <span className="hw-row-warn">{v.unusable_reason}</span>
+                      )}
+                    </>
                   )}
                 </td>
                 <td>{TYPE_LABEL[v.type]}</td>
@@ -182,6 +188,13 @@ export function VoicesPanel() {
                       <button
                         className="hw-link"
                         type="button"
+                        // 參考音不可用時試聽一定失敗（合成端點回 409 VOICE_UNUSABLE），
+                        // 而失敗訊息顯示在面板頂端，看起來像整個清單壞了。
+                        //
+                        // 用真值判斷而非 `!== null`：前端與 BFF 是兩個部署單元，image
+                        // 落後時這個欄位根本不存在，而 `undefined !== null` 會把每一個
+                        // 音色都停用——那是比沒有這個功能更糟的降級。
+                        disabled={Boolean(v.unusable_reason)}
                         onClick={() => void preview(v)}
                       >
                         試聽

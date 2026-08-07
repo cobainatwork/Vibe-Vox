@@ -10,6 +10,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from vibe_vox.adapters.base import CONTRACT_SPEC, Utterance
+from vibe_vox.audio.reference import unusable_reason
 from vibe_vox.audio.wav import wrap_pcm
 from vibe_vox.persistence.voices import VoiceNotFound
 from vibe_vox.tts_text import to_speakable
@@ -53,6 +54,19 @@ class StreamUnsupported(Exception):
     """要求分塊串流，但本服務尚未實作。"""
 
 
+class VoiceUnusable(Exception):
+    """音色存在，但它的參考音不可用（讀不到，或時長超出模型端的硬界）。
+
+    reason 是給人看的具體原因，來自 `audio/reference.py`。往上帶而非在映射層寫死一句
+    籠統的話：消費端只能換音色，但那條訊息是排查時唯一的線索。
+    """
+
+    def __init__(self, vid: str, reason: str) -> None:
+        super().__init__(vid, reason)
+        self.vid = vid
+        self.reason = reason
+
+
 class SpeechRequest(BaseModel):
     input: str
     voice: str
@@ -83,6 +97,7 @@ _OPENAPI_RESPONSES = {
             "UNSUPPORTED_RESPONSE_FORMAT／STREAM_UNSUPPORTED／EMPTY_INPUT"
         },
         "404": {"description": "VOICE_NOT_FOUND"},
+        "409": {"description": "VOICE_UNUSABLE"},
         "413": {"description": "INPUT_TOO_LONG"},
         "502": {"description": "TTS_UNAVAILABLE"},
         "503": {"description": "TOO_MANY_REQUESTS"},
@@ -160,14 +175,30 @@ async def synthesize_speech(body: SpeechRequest, request: Request) -> Response:
     voice = request.app.state.voices.get(body.voice)
     if voice is None:
         raise VoiceNotFound(body.voice)
+    # 參考音的可用性是 Voice 建立時的不變量（audio/reference.py），但那只涵蓋建立路徑：
+    # 該不變量之前建立的音色未經驗證，而 DB 還原、volume 換掛與人工刪檔也都在它之外。
+    #
+    # **用同一組判準而非只檢查檔案存在。** 只檢查存在的話，超界的既有音色照樣被送出去，
+    # 而模型端對超界參考音回的是 ValueError 的文字，adapter 只能翻成 502 TTS_UNAVAILABLE
+    # ——契約 §6 把該碼標為可重試，消費端於是退避重試一個永久失敗（#44）。同時管理平面
+    # 會標它不可用，兩邊各自說一套。
+    #
+    # 代價是每次合成多一次時長量測：wav 只讀標頭（不起子進程），非 wav 付一次 ffprobe。
+    # 相對一次合成本身（實測 0.66 秒）可接受，換掉的是消費端無止盡的重試。
+    reference_audio = Path(voice["ref_audio_path"])
+    reason = await unusable_reason(reference_audio)
+    if reason is not None:
+        raise VoiceUnusable(body.voice, reason)
     utterance = _to_utterance(body, max_chars=settings.tts_max_input_chars)
 
-    # 只有合成進 guard：查音色與驗欄位是輕量的，佔一個併發額度沒有意義。額度與 ASR
+    # 只有合成進 guard：查音色與驗欄位相對合成是輕量的，佔一個併發額度沒有意義。**上面
+    # 的可用性檢查是個例外**——非 wav 的參考音會在 guard 之外起一個 ffprobe 子進程，故
+    # 那道檢查的併發不受 max_concurrent_heavy_requests 約束。它不吃 GPU，量的是檔頭。額度與 ASR
     # 共用（契約 §5.5），因為兩者搶的是同一張卡。預算另計，理由見 tts_request_budget。
     guard = request.app.state.heavy_guard
     async with guard.slot(timeout_seconds=settings.tts_request_budget()):
         audio = await request.app.state.tts_client.synthesize(
-            [utterance], reference_audio=Path(voice["ref_audio_path"])
+            [utterance], reference_audio=reference_audio
         )
 
     # 容器化在此決定：adapter 回帶規格的 PCM，pcm 直出裸資料、wav 才包標頭。

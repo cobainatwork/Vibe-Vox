@@ -46,6 +46,38 @@ def test_reverse_proxy_timeout_exceeds_heavy_guard():
     assert _nginx_proxy_read_timeout() > Settings().heavy_request_budget()
 
 
+def test_bff_image_installs_the_media_toolchain_the_bff_shells_out_to():
+    """BFF image 必須裝 ffmpeg 套件——它同時提供 ffprobe。
+
+    兩者都是子進程依賴，不是 Python 套件，故 `uv sync` 不會發現它們不見了。ffprobe 現在
+    是硬依賴：參考音的時長驗證只有 wav 走 stdlib，其餘五種容器全靠它，缺了它非 wav 的
+    參考音會被判成「不是可解碼的音訊」而擋在建立與合成兩處（audio/duration.py）。
+
+    刻意去讀 Dockerfile 而非相信註解：本專案已有五次「註解說某處設了 X 而該處沒設」的
+    紀錄。斷言字面值防不了「有人為了瘦 image 把它拿掉」這種失效。
+    """
+    dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile"
+    # 先接起續行（`\` 結尾），再只看實際在安裝東西的那一行：整檔搜 "ffmpeg" 會讓「註解
+    # 裡提到 ffmpeg」通過，而那正是本專案反覆出現的那種假記載。
+    installs = [
+        line
+        for line in dockerfile.read_text("utf-8").replace("\\\n", " ").splitlines()
+        if "apt-get install" in line
+    ]
+    assert any("ffmpeg" in line for line in installs), (
+        f"{dockerfile} 未安裝 ffmpeg，轉碼與時長量測都會在執行期才發現"
+    )
+
+
+def test_reference_audio_limit_is_decoupled_from_asr_uploads():
+    # 參考音的時長上界是 30 秒，容不下 200 MiB 的檔案。共用 audio_max_bytes 時，合成路徑
+    # 每次都要把整個參考音讀進記憶體並編成 base64（膨脹 4/3），200 MiB 因此讓每一次合成
+    # 都在處理 267 MiB。斷言的是「小一個數量級以上」而非某個字面值：真正的不變量是兩者
+    # 不得共用同一個數字。
+    settings = Settings()
+    assert settings.voice_ref_audio_max_bytes * 4 < settings.audio_max_bytes
+
+
 def test_aligner_base_url_defaults_to_compose_aligner():
     # 預設對齊 docker-compose 的 aligner 服務與其容器內埠 9100（內部服務，不對外映射）。
     assert Settings().aligner_base_url == "http://aligner:9100"

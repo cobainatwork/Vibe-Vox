@@ -58,6 +58,27 @@ def _captured_payload(tmp_path, utterances: list[Utterance]) -> dict:
     return captured
 
 
+def test_unreadable_reference_audio_becomes_a_declared_error_mode(tmp_path):
+    """參考音讀不到時翻成 interface 宣告的錯誤模式，不讓 OSError 逸出。
+
+    可讀是呼叫端的前置條件（建立時的不變量加端點的檢查，見 audio/reference.py），故這裡
+    處理的是那兩道之後的殘餘：端點檢查與 adapter 讀檔之間的時間差。翻譯漏掉的例外會穿過
+    HeavyRequestGuard 冒成 500，而 500 不在 docs/api/tts.md §6 的錯誤表內。
+    """
+    client = VllmOmniTtsClient(
+        "http://tts:8000",
+        "voxcpm2",
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, content=_wav_bytes())),
+    )
+
+    with pytest.raises(TtsUnavailable):
+        asyncio.run(
+            client.synthesize(
+                [Utterance(text="您好")], reference_audio=tmp_path / "gone.wav"
+            )
+        )
+
+
 def test_request_carries_reference_audio_without_ref_text(tmp_path):
     # ref_audio 走 data: base64（不用 file://，那需要 server 開 --allowed-local-media-path
     # 而擴大檔案系統暴露面）。**不得送 ref_text**：送了會落到 continuation 模式並讓
