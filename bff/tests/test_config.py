@@ -132,6 +132,36 @@ def test_vllm_memory_params_are_set_explicitly(flag):
     )
 
 
+def test_tts_serves_the_model_id_the_bff_asks_for():
+    # BFF 送出的 `model` 必須等於 tts 服務實際註冊的 ID。不等時 vLLM 立刻回 4xx，
+    # adapter 轉成 502 TTS_UNAVAILABLE——而契約 §6 把該碼標為**可重試**，消費端會
+    # 退避重試一個永遠不會好的請求。
+    #
+    # 這是 #35（nginx 預設 60 秒）那類失效的第三例：一個必須兩邊一致的值只在一邊被
+    # 設定過。vLLM 未給 --served-model-name 時以模型路徑（openbmb/VoxCPM2）當 ID，
+    # 而 BFF 的預設是 voxcpm2，兩者靜默不符（2026-08-07 實際踩到）。
+    #
+    # 讀 compose 的實際內容而非斷言字面值：把那個 flag 刪掉，字面值斷言照樣會過。
+    # 錨到行首的 list item，註解裡提及該 flag 的字串不會被誤抓。
+    command = _compose_services()["tts"]
+    m = re.search(
+        r'^\s*-\s*--served-model-name\s*\n\s*-\s*"?([^"\n]+?)"?\s*$', command, re.M
+    )
+    assert m is not None, "tts 服務未設 --served-model-name，vLLM 會拿模型路徑當 ID"
+
+    # 兩處必須是同一個表示式：compose 的 ${} 只作用於本檔、不會傳進容器，故單邊
+    # 覆寫（只在 tts 的 command 用變數）會讓 .env 一改就分歧。同 batch size 的處理。
+    # environment 保留原文引號、command 的 regex 已剝掉，故兩邊都去引號再比。
+    served = m.group(1).strip('"')
+    wired = _compose_env_by_service("VIBE_VOX_TTS_SERVED_NAME").get("bff", "").strip('"')
+    assert wired == served, f"tts 註冊 {served}，而 bff 收到 {wired or '（未佈線）'}"
+
+    # 表示式的 fallback 要等於 Settings 的預設，否則不設 .env 時兩邊仍不同。
+    fallback = re.fullmatch(r"\$\{VIBE_VOX_TTS_SERVED_NAME:-(.+?)\}", served)
+    assert fallback is not None, f"預期為可覆寫的表示式，實得 {served}"
+    assert fallback.group(1) == Settings().tts_served_name
+
+
 def test_batch_size_is_wired_to_both_services_identically():
     # bff 用這個值決定怎麼分批，aligner 用它決定拒絕什麼。compose 漏接任一邊不會報錯，
     # 該服務只是改用自己的程式預設值；而兩邊不一致的症狀是整批回 400、該批全段拿不到

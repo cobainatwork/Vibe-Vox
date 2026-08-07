@@ -16,8 +16,6 @@ from vibe_vox.tts_text import to_speakable
 
 router = APIRouter()
 
-MODEL_NAME = "voxcpm2"
-
 # 契約 §5.3 的三個容器中，mp3 尚未實作（需要編碼器；#6 未列為驗收項）。它留在契約裡
 # 但在此拒絕，而不是回一段標成 audio/mpeg 的 wav——後者會讓消費端拿到解不開的資料。
 #
@@ -104,8 +102,11 @@ def _to_consumer(v: dict) -> dict:
 
 
 @router.get("/api/tts/models")
-async def list_models() -> dict:
-    return {"models": [MODEL_NAME]}
+async def list_models(request: Request) -> dict:
+    # 由 settings 導出而非寫死：這個字串同時是 adapter 送給 tts 服務的 `model`，兩者
+    # 分家的症狀是每次合成 502（tts 服務註冊的是別的 ID）。同一個不變量在部署側由
+    # bff/tests/test_config.py 的 test_tts_serves_the_model_id_the_bff_asks_for 守著。
+    return {"models": [request.app.state.settings.tts_served_name]}
 
 
 @router.get("/api/tts/voices")
@@ -114,16 +115,19 @@ async def list_voices(request: Request) -> dict:
     return {"voices": [_to_consumer(v) for v in repo.list()]}
 
 
-def _reject_unsupported_options(body: SpeechRequest) -> None:
+def _reject_unsupported_options(body: SpeechRequest, *, model_name: str) -> None:
     """擋掉本服務產不出來的請求，在動用音色與 GPU 之前。
 
     stream 先驗：契約 §6 的 STREAM_FORMAT_UNSUPPORTED 列明寫「目前 stream: true 一律
     先撞上 STREAM_UNSUPPORTED」，若順序倒過來，stream+mp3 會回 UNSUPPORTED_RESPONSE_FORMAT
     而與契約表格不符。
+
+    `model_name` 由呼叫端傳入而非在此讀設定：接受什麼與 `GET /api/tts/models` 報什麼
+    必須是同一個值，讓它們各自取一次就有機會分家。
     """
     if body.stream:
         raise StreamUnsupported()
-    if body.model is not None and body.model != MODEL_NAME:
+    if body.model is not None and body.model != model_name:
         raise UnsupportedModel(body.model)
     if body.response_format not in _CONTENT_TYPES:
         raise UnsupportedResponseFormat(body.response_format)
@@ -150,13 +154,12 @@ def _to_utterance(body: SpeechRequest, *, max_chars: int) -> Utterance:
 @router.post("/api/tts/speech", response_class=Response, openapi_extra=_OPENAPI_RESPONSES)
 async def synthesize_speech(body: SpeechRequest, request: Request) -> Response:
     """合成語音，回二進位音訊。**成功不是 JSON**，錯誤才是（docs/api/tts.md §6）。"""
-    _reject_unsupported_options(body)
+    settings = request.app.state.settings
+    _reject_unsupported_options(body, model_name=settings.tts_served_name)
 
     voice = request.app.state.voices.get(body.voice)
     if voice is None:
         raise VoiceNotFound(body.voice)
-
-    settings = request.app.state.settings
     utterance = _to_utterance(body, max_chars=settings.tts_max_input_chars)
 
     # 只有合成進 guard：查音色與驗欄位是輕量的，佔一個併發額度沒有意義。額度與 ASR

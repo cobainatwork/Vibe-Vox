@@ -16,6 +16,9 @@ services:
       VIBE_VOX_ALIGNER_BASE_URL: "http://aligner:9100"
       # 埠須與 tts 服務 command 的 --port 一致（vLLM serve 預設 8000）。
       VIBE_VOX_TTS_BASE_URL: "http://tts:8000"
+      # **同一個表示式必須寫在 bff 與 tts 兩處**，理由同下方的 batch size：compose 的
+      # ${} 只作用於本檔，不會傳進容器，單邊覆寫會讓兩者分歧而每次合成都 502。
+      VIBE_VOX_TTS_SERVED_NAME: "${VIBE_VOX_TTS_SERVED_NAME:-voxcpm2}"
       # **同一個表示式必須寫在 bff 與 aligner 兩處**，由 .env 單點覆寫，兩邊才不會分歧
       # （分歧的症狀見 bff/src/vibe_vox/adapters/aligner.py 的 DEFAULT_MAX_BATCH_ITEMS）。
       # bff/tests/test_config.py 會讀本檔確認兩處都佈線且值相同。
@@ -118,6 +121,17 @@ services:
       - serve
       - openbmb/VoxCPM2
       - --omni
+      # 對外的模型識別字串，與 BFF 送出的 `model` 欄位必須一致。**不設的後果不是名字
+      # 難看**：vLLM 會拿模型路徑（openbmb/VoxCPM2）當 ID，而 BFF 送 voxcpm2，於是每
+      # 一次合成都被 vLLM 以 4xx 拒絕、轉成 502 TTS_UNAVAILABLE（2026-08-07 實際踩到，
+      # 症狀是 0.03 秒就回的 502）。BFF 的 GET /api/tts/models 也報這個值（由
+      # settings.tts_served_name 導出），不變量由 test_config.py 與 test_tts.py 守著。
+      #
+      # ASR 側的對應值（vibevoice）不在本檔也不在 vllm.Dockerfile，而在 image 內的
+      # 上游 start_server.py——正是上面 vllm 服務註解講的「連 grep 都找不到」，本 repo
+      # 沒有任何測試守著它。
+      - --served-model-name
+      - "${VIBE_VOX_TTS_SERVED_NAME:-voxcpm2}"
       - --host
       - "0.0.0.0"
       - --port

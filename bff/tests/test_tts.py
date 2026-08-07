@@ -60,6 +60,28 @@ def test_speech_returns_wav_audio(tmp_path):
         assert w.getframerate() == _RATE
 
 
+def test_models_endpoint_reports_the_name_the_adapter_sends(tmp_path):
+    # `GET /api/tts/models` 宣告的名稱必須就是 adapter 送給 tts 服務的 `model`。
+    # 寫死時，用 .env 覆寫 VIBE_VOX_TTS_SERVED_NAME 會讓兩者分家：清單仍報 voxcpm2，
+    # 消費端照清單送 voxcpm2 被端點接受、再被 vLLM 以 4xx 拒絕（502），而送真正註冊
+    # 的名字反而在端點就被 400 UNSUPPORTED_MODEL 擋下。
+    client = _client_with(tmp_path, StubTtsClient(), tts_served_name="voxcpm2-tw")
+
+    assert client.get("/api/tts/models").json() == {"models": ["voxcpm2-tw"]}
+
+
+def test_speech_accepts_the_model_name_the_list_reports(tmp_path):
+    client = _client_with(tmp_path, StubTtsClient(), tts_served_name="voxcpm2-tw")
+    voice = _create_voice(client)
+
+    resp = client.post(
+        "/api/tts/speech",
+        json={"input": "測試", "voice": voice["id"], "model": "voxcpm2-tw"},
+    )
+
+    assert resp.status_code == 200
+
+
 def test_speech_unknown_voice_returns_404(tmp_path):
     client = _client(tmp_path)
 
