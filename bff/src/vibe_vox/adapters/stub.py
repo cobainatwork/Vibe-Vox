@@ -5,9 +5,9 @@ from pathlib import Path
 from vibe_vox.adapters.base import (
     CONTRACT_SPEC,
     Segment,
+    SegmentAlignment,
     TranscriptionResult,
     Utterance,
-    Word,
 )
 from vibe_vox.audio.wav import PcmAudio
 
@@ -49,7 +49,7 @@ class StubAlignerClient:
     """
 
     def __init__(
-        self, ready: bool = True, result: list[list[Word]] | None = None
+        self, ready: bool = True, result: list[SegmentAlignment] | None = None
     ) -> None:
         self._ready = ready
         self._result = result
@@ -57,9 +57,15 @@ class StubAlignerClient:
     async def health(self) -> bool:
         return self._ready
 
-    async def align(self, audio: Path, segments: list[Segment]) -> list[list[Word]]:
+    async def align(
+        self, audio: Path, segments: list[Segment]
+    ) -> list[SegmentAlignment]:
         if self._result is None:
-            return [[] for _ in segments]
+            # bounds 取段界本身：本替身不切片，故沒有 buffer 可言。words 為空時落界
+            # 判準用不到它，但 bounds 屬 interface，不能給假的寬範圍。
+            return [
+                SegmentAlignment(words=[], bounds=(s.Start, s.End)) for s in segments
+            ]
         return self._result
 
 

@@ -8,19 +8,13 @@ import asyncio
 import email
 import io
 import json
-import logging
 import wave
 from pathlib import Path
 
 import httpx
 import pytest
 
-from vibe_vox.adapters.aligner import (
-    DEFAULT_MAX_BATCH_ITEMS,
-    AlignerTimeout,
-    AlignerUnavailable,
-    HttpAlignerClient,
-)
+from vibe_vox.adapters.aligner import DEFAULT_MAX_BATCH_ITEMS, HttpAlignerClient
 from vibe_vox.adapters.base import Segment, Word
 
 _RATE = 24000
@@ -174,7 +168,7 @@ def test_align_splits_the_meeting_recording_at_the_default_limit(tmp_path):
     assert sizes == [8, 8, 8, 8, 8, 8, 8, 1]  # 63 − 6 = 57 段送出
     assert max(sizes) <= DEFAULT_MAX_BATCH_ITEMS
     assert len(result) == 63  # 回傳仍與原段數對齊，標記段留空位
-    assert result[0] == [] and result[13] == []
+    assert result[0].words == [] and result[13].words == []
 
 
 def test_align_isolates_a_failed_batch_from_the_others(tmp_path):
@@ -187,29 +181,37 @@ def test_align_isolates_a_failed_batch_from_the_others(tmp_path):
     )
 
     # 批次為 `第0段`／`第1段` 與 `第2段`／`第3段`，後者失敗。
-    assert result[0] == [Word(Text="字", Start=0.1, End=0.3)]
-    assert result[1] != []
-    assert result[2] == []
-    assert result[3] == []
+    assert result[0].words == [Word(Text="字", Start=0.1, End=0.3)]
+    assert result[1].words != []
+    assert result[2].words == []
+    assert result[3].words == []
+    # 失敗批次的段落仍帶自己的切片範圍：落界判準對每一段都要有可比對的範圍。
+    assert result[2].bounds == (1.5, 3.5)
 
 
-def test_align_logs_the_reason_a_batch_was_dropped(tmp_path, caplog):
-    # 分批帶來一條新的靜默降級路徑：一批失敗、其他批成功，故不 raise，端點層那條服務
-    # 層級的 log 不會出現。那些段落仍悄悄變成未對齊，而 merge_alignment 只會說「字級
-    # 清單為空」，看不出有一批整批失敗（#37）。
+def test_align_names_which_batch_failed_on_the_segments_that_were_in_it(tmp_path):
+    # 分批帶來一條靜默降級路徑：一批失敗、其他批成功。那些段落若只是變成空的 words，
+    # 下游只會說「字級清單為空」，看不出有一批整批失敗（#37）。原因帶批號，故同批的
+    # 段落在下游能被認出是同一件事而合記一條。
     client = _client(_second_batch_fails, slice_buffer_seconds=0.5, max_batch_items=2)
 
-    with caplog.at_level(logging.WARNING, logger="vibe_vox.adapters.aligner"):
-        asyncio.run(client.align(_wav(tmp_path, seconds=10.0), _numbered_segments(4)))
+    result = asyncio.run(
+        client.align(_wav(tmp_path, seconds=10.0), _numbered_segments(4))
+    )
 
-    assert "ALIGN_FAILED" in caplog.text
-    assert "推論失敗" in caplog.text
+    # 批次為 `第0段`／`第1段` 與 `第2段`／`第3段`，後者失敗。
+    assert result[0].omission is None and result[1].omission is None
+    assert result[2].omission == result[3].omission  # 同批同因，下游據此合記
+    assert result[2].omission.code == "batch_failed"
+    assert "第 2／2 批" in result[2].omission.detail
+    assert "ALIGN_FAILED" in result[2].omission.detail
+    assert "推論失敗" in result[2].omission.detail
 
 
-def test_align_logs_the_other_causes_when_batches_fail_differently(tmp_path, caplog):
+def test_align_keeps_each_cause_when_batches_fail_differently(tmp_path):
     # 跨批不保證同因：一批逾時、另一批回 503 是可能的（服務在兩次請求之間被重啟）。
-    # 只有一個例外能往上傳，其餘批次的原因若不記下就完全消失，而 #37 的驗收正是
-    # 「log 能直接指出原因而不需反推」。
+    # 原因逐段帶出去，故兩個原因都留著——舊做法只有一個例外能往上傳，另一個就消失了，
+    # 而 #37 的驗收正是「能直接指出原因而不需反推」。
     def handler(request: httpx.Request) -> httpx.Response:
         items, _ = _parse_multipart(request)
         if json.loads(items)[0]["text"] == "第0段":
@@ -220,14 +222,13 @@ def test_align_logs_the_other_causes_when_batches_fail_differently(tmp_path, cap
 
     client = _client(handler, slice_buffer_seconds=0.5, max_batch_items=2)
 
-    with caplog.at_level(logging.WARNING, logger="vibe_vox.adapters.aligner"):
-        with pytest.raises(AlignerTimeout):
-            asyncio.run(
-                client.align(_wav(tmp_path, seconds=10.0), _numbered_segments(4))
-            )
+    result = asyncio.run(
+        client.align(_wav(tmp_path, seconds=10.0), _numbered_segments(4))
+    )
 
-    # 第一批的逾時往上傳、由端點層記錄；第二批的原因必須在此留下。
-    assert "ALIGNER_NOT_READY" in caplog.text
+    assert "逾時" in result[0].omission.detail
+    assert "ALIGNER_NOT_READY" in result[2].omission.detail
+    assert result[0].omission != result[2].omission  # 不同因，下游不得合成一條
 
 
 def test_align_shifts_timestamps_back_to_absolute_time(tmp_path):
@@ -249,8 +250,138 @@ def test_align_shifts_timestamps_back_to_absolute_time(tmp_path):
     ]
     result = asyncio.run(client.align(_wav(tmp_path), segments))
 
-    assert result[0] == [Word(Text="你", Start=0.12, End=0.30)]
-    assert result[1] == [Word(Text="再", Start=1.10, End=1.35)]
+    assert result[0].words == [Word(Text="你", Start=0.12, End=0.30)]
+    assert result[1].words == [Word(Text="再", Start=1.10, End=1.35)]
+
+
+def test_align_treats_the_timeout_as_a_budget_for_all_batches(tmp_path):
+    # 分批把對齊的最壞牆鐘時間從「一次逾時」變成「批數 × 逾時」，而端點的 guard 預算
+    # 只加了一次 aligner_timeout（`config.heavy_request_budget`）。63 段的會議錄音在
+    # 預設上限下是 8 批，服務掛住時對齊最壞要 8 × 60 = 480 秒，超過 504 秒預算裡分給
+    # 它的那一份，於是 guard 會先於內層觸發並回 504 REQUEST_TIMEOUT，**逐字稿一併
+    # 喪失**——正是 ADR-0004 第二層降級要避免的結果。
+    #
+    # 故逾時是整體預算而非每批各有一份：用盡後剩餘批次直接不送，已取得的結果留著。
+    # 第一批立即回應，第二批卡住到預算耗盡。時間上只依賴「5 秒遠大於 0.3 秒」，不依賴
+    # 細微時序。**逾時須在此層以 asyncio.timeout 施加**：httpx 的 timeout 量的是連線與
+    # 兩次讀取之間的間隔，慢速滴流的回應能一路超出預算（MockTransport 更是完全不套用
+    # 它），故只交給 httpx 的話這條保證不成立。
+    sent = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        if len(sent) > 1:
+            await asyncio.sleep(5)
+        _, audio = _parse_multipart(request)
+        return _reply(
+            [{"words": [{"text": "字", "start": 0.1, "end": 0.3}]} for _ in audio]
+        )
+
+    client = _client(handler, slice_buffer_seconds=0.5, max_batch_items=1, timeout=0.3)
+
+    result = asyncio.run(
+        client.align(_wav(tmp_path, seconds=10.0), _numbered_segments(4))
+    )
+
+    assert len(sent) == 2  # 第二批把預算用完後，第三、四批不再送
+    assert result[0].words != [] and result[0].omission is None  # 已取得的留著
+    assert result[1].omission.code == "batch_failed"
+    assert "逾時" in result[1].omission.detail
+    assert all(result[i].omission.code == "budget_spent" for i in (2, 3))
+
+
+def test_align_reports_the_slice_bounds_each_segment_was_aligned_within(tmp_path):
+    # 落界判準要比對的是「該段切片實際涵蓋的時間範圍」，而那個範圍是切片時夾限出來的：
+    # 第一段的左 buffer 落在音檔開頭外被夾掉、末段的右 buffer 被檔尾夾掉。
+    #
+    # 由本 client 回報而非讓呼叫端重算：重算要複製夾限規則與 buffer 設定值，而 buffer
+    # 是 client 建構時給的，呼叫端只能另外去讀同一個 Settings 欄位。兩處一漂移，落界
+    # 判準就以錯誤的範圍比對。夾限本身也不是純算術——起點取的是 frame 格點（見
+    # `Slice.start`），未量化的重算值會與 Word 的時間戳落在格點兩側。
+    def handler(request: httpx.Request) -> httpx.Response:
+        _, audio = _parse_multipart(request)
+        return _reply([{"words": []} for _ in audio])
+
+    client = _client(handler, slice_buffer_seconds=0.5)
+    segments = [
+        Segment(Start=0.0, End=1.0, Speaker="0", Content="你好"),
+        Segment(Start=1.0, End=2.0, Speaker="0", Content="再見"),
+        Segment(Start=2.0, End=3.0, Speaker="0", Content="珍重"),
+    ]
+
+    result = asyncio.run(client.align(_wav(tmp_path, seconds=3.0), segments))
+
+    assert result[0].bounds == (0.0, 1.5)  # 左 buffer 被音檔開頭夾掉
+    assert result[1].bounds == (0.5, 2.5)
+    assert result[2].bounds == (1.5, 3.0)  # 右 buffer 被檔尾夾掉
+
+
+def test_align_degrades_every_segment_when_the_service_is_unreachable(tmp_path):
+    # ADR-0004 的第二層降級由本 interface 保證，不靠呼叫端記得攔例外。呼叫端若要自己
+    # 攔，攔下之後仍得生出每段的切片範圍才能交給合理性檢查，而那個範圍只有本 client
+    # 算得出來——降級與範圍是同一件事的兩面，分屬兩層就必然有一層要重算另一層的東西。
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    client = _client(handler, slice_buffer_seconds=0.5)
+    segments = [
+        Segment(Start=0.0, End=1.0, Speaker="0", Content="你好"),
+        Segment(Start=1.0, End=2.0, Speaker="0", Content="再見"),
+    ]
+
+    result = asyncio.run(client.align(_wav(tmp_path), segments))
+
+    assert [r.words for r in result] == [[], []]
+    assert result[0].bounds == (0.0, 1.5)  # 範圍照常，未取得字級結果不代表該段無音訊
+    assert result[1].bounds == (0.5, 2.5)
+
+
+def test_align_carries_the_service_error_as_the_reason_each_segment_was_omitted(tmp_path):
+    # 原因隨結果一起過 seam 而非只寫進 log：呼叫端要據此決定「這段的空是已被解釋的」，
+    # 否則它只能逐段記「字級清單為空」，把唯一的真原因洗掉（#36 實測 1 條真原因加 63
+    # 條同質雜訊）。訊息本身也是診斷的入口，故須含服務端回的錯誤碼（#37）。
+    client = _client(
+        lambda r: httpx.Response(
+            400,
+            json={
+                "error": {
+                    "code": "BATCH_TOO_LARGE",
+                    "message": "單次 63 段超過上限 32 段，請分批送。",
+                }
+            },
+        )
+    )
+    segments = [Segment(Start=0.0, End=1.0, Speaker="0", Content="你好")]
+
+    result = asyncio.run(client.align(_wav(tmp_path), segments))
+
+    assert result[0].omission.code == "batch_failed"
+    assert "BATCH_TOO_LARGE" in result[0].omission.detail
+    assert "請分批送" in result[0].omission.detail
+
+
+def test_align_names_why_a_segment_was_never_sent(tmp_path):
+    # 三種未送出的理由（空文字、非語音標記段、切片為零長度）在 log 裡現在一律顯示為
+    # 「字級清單為空」，看不出是哪一種。理由只有本 client 知道，隨結果帶出去才對得上。
+    def handler(request: httpx.Request) -> httpx.Response:
+        _, audio = _parse_multipart(request)
+        return _reply([{"words": []} for _ in audio])
+
+    client = _client(handler, slice_buffer_seconds=0.5)
+    segments = [
+        Segment(Start=0.0, End=1.0, Speaker="0", Content=""),
+        Segment(Start=1.0, End=2.0, Speaker="", Content="[Silence]"),
+        Segment(Start=90.0, End=91.0, Speaker="0", Content="超出音檔"),
+        Segment(Start=2.0, End=2.5, Speaker="0", Content="你好"),
+    ]
+
+    result = asyncio.run(client.align(_wav(tmp_path, seconds=3.0), segments))
+
+    assert result[0].omission.code == "empty_content"
+    assert result[1].omission.code == "non_speech_marker"
+    assert "[Silence]" in result[1].omission.detail  # detail 指出是哪一種標記
+    assert result[2].omission.code == "empty_slice"
+    assert result[3].omission is None  # 送出且取得結果的段落沒有 omission
 
 
 def test_align_skips_request_when_no_segments(tmp_path):
@@ -262,19 +393,6 @@ def test_align_skips_request_when_no_segments(tmp_path):
     result = asyncio.run(_client(handler).align(_wav(tmp_path), []))
 
     assert result == []
-
-
-def test_align_rejects_item_count_mismatch(tmp_path):
-    # 回傳筆數與送出段數不符時 zip 會靜默截短，使該段之後的 offset 全數錯位且
-    # 無聲無息。視為上游違約。
-    client = _client(lambda r: _reply([{"words": []}]))
-    segments = [
-        Segment(Start=0.0, End=1.0, Speaker="0", Content="你好"),
-        Segment(Start=1.0, End=2.0, Speaker="0", Content="再見"),
-    ]
-
-    with pytest.raises(AlignerUnavailable):
-        asyncio.run(client.align(_wav(tmp_path), segments))
 
 
 def test_align_isolates_segments_the_service_would_reject(tmp_path):
@@ -297,8 +415,8 @@ def test_align_isolates_segments_the_service_would_reject(tmp_path):
     items, audio = _parse_multipart(captured["request"])
     assert json.loads(items) == [{"text": "再見"}]  # 只送可對齊的那段
     assert len(audio) == 1
-    assert result[0] == []  # 退化段落留空位，索引不位移
-    assert result[1] == [Word(Text="再", Start=1.10, End=1.35)]
+    assert result[0].words == []  # 退化段落留空位，索引不位移
+    assert result[1].words == [Word(Text="再", Start=1.10, End=1.35)]
 
 
 def test_align_skips_non_speech_marker_segments(tmp_path):
@@ -326,8 +444,8 @@ def test_align_skips_non_speech_marker_segments(tmp_path):
     items, audio = _parse_multipart(captured["request"])
     assert json.loads(items) == [{"text": "你好"}]
     assert len(audio) == 1
-    assert result[0] == []  # 標記段留空位，走 empty_words 路徑，語義正確
-    assert result[1] == [Word(Text="你", Start=2.07, End=2.25)]
+    assert result[0].words == []  # 標記段留空位，走 empty_words 路徑，語義正確
+    assert result[1].words == [Word(Text="你", Start=2.07, End=2.25)]
 
 
 def test_align_still_sends_segments_that_merely_contain_brackets(tmp_path):
@@ -346,7 +464,7 @@ def test_align_still_sends_segments_that_merely_contain_brackets(tmp_path):
 
     items, _ = _parse_multipart(captured["request"])
     assert json.loads(items) == [{"text": "你好[Music]"}]
-    assert result[0] == [Word(Text="你", Start=0.12, End=0.30)]
+    assert result[0].words == [Word(Text="你", Start=0.12, End=0.30)]
 
 
 def test_align_isolates_segments_whose_slice_is_empty(tmp_path):
@@ -361,8 +479,10 @@ def test_align_isolates_segments_whose_slice_is_empty(tmp_path):
     ]
     result = asyncio.run(client.align(_wav(tmp_path, seconds=3.0), segments))
 
-    assert result[0] == [Word(Text="你", Start=0.12, End=0.30)]
-    assert result[1] == []
+    assert result[0].words == [Word(Text="你", Start=0.12, End=0.30)]
+    assert result[1].words == []
+    # 切片為零長度時 bounds 退化為單點，落界判準因此攔下任何字（該段本無音訊可對）。
+    assert result[1].bounds == (3.0, 3.0)
 
 
 def test_align_skips_request_when_every_segment_degenerate(tmp_path):
@@ -376,7 +496,7 @@ def test_align_skips_request_when_every_segment_degenerate(tmp_path):
     ]
     result = asyncio.run(_client(handler).align(_wav(tmp_path), segments))
 
-    assert result == [[], []]
+    assert [r.words for r in result] == [[], []]
 
 
 def test_health_reports_ready_only_on_success_status():
@@ -394,27 +514,21 @@ def test_health_reports_not_ready_when_unreachable():
     assert not asyncio.run(_client(handler).health())
 
 
-def test_align_raises_timeout(tmp_path):
+def test_align_reports_a_timeout_as_the_reason(tmp_path):
+    # 逾時與「服務回錯」是不同的故障——前者查網路與負載，後者查服務端——故原因須認得
+    # 出是哪一種。舊做法以兩個例外型別區分，改由訊息本身承載。
     def handler(request):
         raise httpx.TimeoutException("slow")
 
     segments = [Segment(Start=0.0, End=1.0, Speaker="0", Content="你好")]
 
-    with pytest.raises(AlignerTimeout):
-        asyncio.run(_client(handler).align(_wav(tmp_path), segments))
+    result = asyncio.run(_client(handler).align(_wav(tmp_path), segments))
+
+    assert result[0].words == []
+    assert "逾時" in result[0].omission.detail
 
 
-def test_align_raises_unavailable_on_connect_error(tmp_path):
-    def handler(request):
-        raise httpx.ConnectError("connection refused")
-
-    segments = [Segment(Start=0.0, End=1.0, Speaker="0", Content="你好")]
-
-    with pytest.raises(AlignerUnavailable):
-        asyncio.run(_client(handler).align(_wav(tmp_path), segments))
-
-
-def test_align_raises_unavailable_on_error_status(tmp_path):
+def test_align_degrades_on_error_status(tmp_path):
     # 服務端的 4xx／5xx（BATCH_TOO_LARGE、ALIGN_FAILED、ALIGNER_NOT_READY 等）
     # 一律視為對齊不可得：字級時間戳是附加功能，逐字稿仍須照常回傳（ADR-0004）。
     client = _client(
@@ -424,73 +538,40 @@ def test_align_raises_unavailable_on_error_status(tmp_path):
     )
     segments = [Segment(Start=0.0, End=1.0, Speaker="0", Content="你好")]
 
-    with pytest.raises(AlignerUnavailable):
-        asyncio.run(client.align(_wav(tmp_path), segments))
+    result = asyncio.run(client.align(_wav(tmp_path), segments))
+
+    assert result[0].words == []
+    assert "503" in result[0].omission.detail
+    assert "ALIGNER_NOT_READY" in result[0].omission.detail
 
 
-def test_unavailable_carries_the_service_error_code(tmp_path):
-    # aligner 的回應體已寫明原因（README 定義九個錯誤碼），丟棄它會讓 log 只剩
-    # `AlignerUnavailable()` 空括號：看不出是 400 還是 503、更看不出是哪個碼。#36 的
-    # 診斷因此得從「63 段」反推，而現成的答案本來就在回應體裡（#37）。
-    client = _client(
-        lambda r: httpx.Response(
-            400,
-            json={
-                "error": {
-                    "code": "BATCH_TOO_LARGE",
-                    "message": "單次 63 段超過上限 32 段，請分批送。",
-                }
-            },
-        )
-    )
-    segments = [Segment(Start=0.0, End=1.0, Speaker="0", Content="你好")]
-
-    with pytest.raises(AlignerUnavailable) as raised:
-        asyncio.run(client.align(_wav(tmp_path), segments))
-
-    described = str(raised.value)
-    assert "400" in described
-    assert "BATCH_TOO_LARGE" in described
-    assert "請分批送" in described
-
-
-def test_align_raises_unavailable_on_non_json_body(tmp_path):
-    # 回 200 但主體非 JSON（proxy 介入、服務被替換）時 resp.json() 拋
+def test_align_describes_a_non_json_success_body(tmp_path):
+    # 回 200 但主體非 JSON（反向代理介入、服務被替換）時 resp.json() 拋
     # JSONDecodeError，它不屬 httpx.HTTPError。不攔就會冒成 500 使逐字稿一併失效，
-    # 違反「aligner 全掛時逐字稿仍可取得」（ADR-0004 第二層降級）。
+    # 違反 ADR-0004 的第二層降級。這也是最容易被誤讀成「對齊品質不佳」的故障——它不
+    # 表現為任何錯誤狀態碼，故原因必須指出主體不是 JSON。
     client = _client(lambda r: httpx.Response(200, text="<html>502 Bad Gateway</html>"))
     segments = [Segment(Start=0.0, End=1.0, Speaker="0", Content="你好")]
 
-    with pytest.raises(AlignerUnavailable):
-        asyncio.run(client.align(_wav(tmp_path), segments))
+    result = asyncio.run(client.align(_wav(tmp_path), segments))
+
+    assert result[0].words == []
+    assert "非 JSON" in result[0].omission.detail
+    assert "Bad Gateway" in result[0].omission.detail
 
 
-def test_unavailable_describes_a_non_json_success_body(tmp_path):
-    # 200 但主體是 HTML（反向代理介入、服務被換成別的東西）。這是最容易被誤讀成「對齊
-    # 品質不佳」的故障，因為它不表現為任何錯誤狀態碼，故 log 必須指出主體不是 JSON。
-    client = _client(lambda r: httpx.Response(200, text="<html>502 Bad Gateway</html>"))
-    segments = [Segment(Start=0.0, End=1.0, Speaker="0", Content="你好")]
-
-    with pytest.raises(AlignerUnavailable) as raised:
-        asyncio.run(client.align(_wav(tmp_path), segments))
-
-    described = str(raised.value)
-    assert "非 JSON" in described
-    assert "Bad Gateway" in described
-
-
-def test_unavailable_describes_an_item_count_mismatch(tmp_path):
-    # 「服務回的筆數不對」與「服務掛了」是不同的故障，log 若都印成空括號就會把人導向
-    # 錯誤的方向：前者要查服務端的實作，後者要查部署（#37）。
+def test_align_describes_an_item_count_mismatch(tmp_path):
+    # 回傳筆數與送出段數不符時 zip 會靜默截短，使該段之後的 offset 全數錯位且無聲無息，
+    # 故視為上游違約。「服務回的筆數不對」與「服務掛了」是不同的故障，原因若無法區分
+    # 就會把人導向錯誤的方向：前者要查服務端的實作，後者要查部署（#37）。
     client = _client(lambda r: _reply([{"words": []}, {"words": []}]))
     segments = [Segment(Start=0.0, End=1.0, Speaker="0", Content="你好")]
 
-    with pytest.raises(AlignerUnavailable) as raised:
-        asyncio.run(client.align(_wav(tmp_path), segments))
+    result = asyncio.run(client.align(_wav(tmp_path), segments))
 
-    described = str(raised.value)
-    assert "送出 1" in described
-    assert "回 2" in described
+    assert result[0].words == []
+    assert "送出 1" in result[0].omission.detail
+    assert "回 2" in result[0].omission.detail
 
 
 @pytest.mark.parametrize(
@@ -502,10 +583,12 @@ def test_unavailable_describes_an_item_count_mismatch(tmp_path):
         {"items": [{"words": [{"text": "你"}]}]},  # Word 缺時間戳
     ],
 )
-def test_align_raises_unavailable_on_malformed_envelope(tmp_path, body):
+def test_align_degrades_on_malformed_envelope(tmp_path, body):
     # 回 200 但信封不合契約不得 crash 成 500（比照 VllmAsrClient 的信封防禦）。
     client = _client(lambda r: httpx.Response(200, json=body))
     segments = [Segment(Start=0.0, End=1.0, Speaker="0", Content="你好")]
 
-    with pytest.raises(AlignerUnavailable):
-        asyncio.run(client.align(_wav(tmp_path), segments))
+    result = asyncio.run(client.align(_wav(tmp_path), segments))
+
+    assert result[0].words == []
+    assert result[0].omission is not None

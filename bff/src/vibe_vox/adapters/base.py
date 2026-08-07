@@ -5,6 +5,7 @@ synthesize()（其對應票）隨各票加入本介面。字級對齊 align()（
 新增的第三個邊界，其實作為獨立部署單元而非模型 in-process 載入。
 """
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -61,6 +62,47 @@ class AsrClient(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class Omission:
+    """一段沒有字級結果的原因。
+
+    形狀比照 `alignment.Defect`：code 為穩定的機器可讀值，detail 給人看並含具體的數值
+    與服務端訊息。分成兩欄而非一句格式化文字，是因為**整個值就是下游的分組鍵**——同一
+    批失敗的段落得到相等的 Omission 而合記一條，跨批的 detail 不同故各自留著（跨批不
+    保證同因）。若只有一句文字，分組會依賴「訊息剛好逐字相同」這種巧合，而任何隨段落
+    變動的細節都會悄悄破壞它。
+    """
+
+    code: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class SegmentAlignment:
+    """單一 Segment 的字級對齊結果。
+
+    words 的時間戳為**原音檔的絕對時間**（切片 offset 已加回）。對齊品質的合理性
+    檢查與降級標記不在此層，屬 #28。
+
+    bounds 是該段切片在原音檔實際涵蓋的時間範圍，供落界判準使用。**由實作回報而非
+    讓呼叫端重算**：夾限規則與 buffer 設定只有實作知道，呼叫端重算等於複製一份並期待
+    兩者永不漂移；且夾限取的是 frame 格點，未量化的重算值會與 words 的時間戳落在格點
+    兩側，使正常的字被判為落在範圍外。
+
+    words 為空時 bounds 仍有效——未取得字級結果不代表該段沒有音訊。
+
+    omission 說明該段為何沒有字級結果（未送出、該批失敗、服務整體不可用），為 None 時
+    表示實作確實取得了結果——**空的 words 配 None 是有意義的組合**，代表服務回了零個
+    字，該由合理性檢查處理而非當成故障。**原因隨結果過 seam 而不是只寫進 log**：呼叫端
+    據此知道這段的空已被解釋，否則它只能逐段重述「字級清單為空」，把唯一的真原因洗掉
+    （#36 實測為 1 條真原因加 63 條同質雜訊）。
+    """
+
+    words: list[Word]
+    bounds: tuple[float, float]
+    omission: Omission | None = None
+
+
 @runtime_checkable
 class AlignerClient(Protocol):
     async def health(self) -> bool:
@@ -69,11 +111,16 @@ class AlignerClient(Protocol):
 
     async def align(
         self, audio: Path, segments: list[Segment]
-    ) -> list[list[Word]]:
-        """逐段對齊，回每段的字級時間戳，順序與 segments 一一對應。
+    ) -> list[SegmentAlignment]:
+        """逐段對齊，回每段的字級時間戳與其切片範圍，順序與 segments 一一對應。
 
-        時間戳為**原音檔的絕對時間**（切片 offset 已加回）。對齊品質的合理性
-        檢查與降級標記不在此層，屬 #28。
+        **對齊服務不可用或逾時不拋出，回全段的空結果並在 omission 說明原因。** 這是
+        ADR-0004 第二層降級的所在：對齊是附加功能，逐字稿有獨立價值，不因它失效而
+        一併不可得。放在此層而非由呼叫端攔例外，是因為降級後仍須回報每段的 bounds，
+        而那只有實作算得出來——兩者分屬兩層就必然有一層要重算另一層的東西。
+
+        音檔本身讀不到（路徑不存在、非合法 wav）仍會拋出：那不是對齊失效，是呼叫端
+        給錯了東西。
         """
         ...
 

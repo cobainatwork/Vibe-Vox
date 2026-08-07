@@ -10,12 +10,15 @@
   原音檔的絕對時間。
 - 服務端對整個 batch 是全有全無：任一筆不合契約即整批回錯。故退化段落在送出前
   就剔除，否則單段異常會使整檔的字級時間戳一併失效。
+- 對齊不可得（服務掛掉、逾時、某批失敗、段落根本沒送出）不拋出，逐段以 omission
+  說明原因，見 `AlignerClient.align`。本模組因此不記 log：原因隨結果過 seam，由
+  `merge_alignment` 連同段號一起記，同因的段落合記一條。
 
 遠端連線屬環境相依，測試以 httpx MockTransport 注入假回應。
 """
 
+import asyncio
 import json
-import logging
 import re
 from dataclasses import dataclass
 from itertools import batched
@@ -24,22 +27,20 @@ from typing import Any
 
 import httpx
 
-from vibe_vox.adapters.base import Segment, Word
+from vibe_vox.adapters.base import Omission, Segment, SegmentAlignment, Word
 from vibe_vox.audio.slice import Slice, slice_wav
-
-logger = logging.getLogger(__name__)
 
 
 class AlignerUnavailable(Exception):
     """對齊服務連不上、回非 2xx 或回傳信封異常。
 
-    **端點層攔下並降級，不映射成狀態碼**：對齊是附加功能，逐字稿有獨立價值，不因
-    它失效而一併不可得（ADR-0004 的第二層降級）。回應仍為 200，全段標記未對齊。
+    **本模組內部用，不跨 seam**：`align` 會把它轉成該批段落的 omission 而不往外拋，
+    降級因此是 interface 的保證而非呼叫端的紀律（見 `AlignerClient.align`）。
     """
 
 
 class AlignerTimeout(Exception):
-    """對齊服務呼叫逾時。降級方式同 AlignerUnavailable，不映射成狀態碼。"""
+    """對齊服務呼叫逾時。用途同 AlignerUnavailable，不跨 seam。"""
 
 
 # 切片左右各留的 buffer（秒）。VibeVoice 的段界是模型自選切點而非發音邊界
@@ -107,17 +108,11 @@ class _Sendable:
     sliced: Slice
 
 
-@dataclass(frozen=True)
-class _BatchFailure:
-    """一批送出失敗的紀錄。order 自 1 起算，僅用於 log 讓人對上是第幾批。"""
+def _why_not_sent(segment: Segment, sliced: Slice) -> Omission | None:
+    """該段不送出對齊的理由；可送出則回 `None`。
 
-    order: int
-    segment_count: int
-    error: Exception
-
-
-def _is_alignable(segment: Segment, sliced: Slice) -> bool:
-    """該段是否可送出對齊。
+    回理由而非布林：三種情形在下游一律表現為「這段沒有字」，看不出是哪一種，而它們
+    的意義完全不同——非語音標記段是正常結果，切片為零長度則是模型的時間戳幻覺。
 
     服務端會拒絕空文字（400 `INVALID_ITEMS`）、零長度音訊則使推論失敗（500
     `ALIGN_FAILED`），而兩者都是整批回錯，會連帶毀掉同批正常段落的時間戳。
@@ -128,11 +123,18 @@ def _is_alignable(segment: Segment, sliced: Slice) -> bool:
     一個 Word，模型會把它對到該段靜音上。第一段若是 `[Silence]`，`speech_start` 會
     變成約 0，等於宣稱沒有開頭沉默，而 ADR-0004 明文要求保留它（#38）。
     """
-    return (
-        bool(segment.Content.strip())
-        and not _NON_SPEECH_MARKER.match(segment.Content)
-        and sliced.frames > 0
-    )
+    if not segment.Content.strip():
+        return Omission("empty_content", "段落文字為空，未送出對齊")
+    if _NON_SPEECH_MARKER.match(segment.Content):
+        return Omission(
+            "non_speech_marker",
+            f"非語音標記段（{segment.Content.strip()}），未送出對齊",
+        )
+    if sliced.frames <= 0:
+        return Omission(
+            "empty_slice", "切片為零長度（段落時間戳落在音檔外），未送出對齊"
+        )
+    return None
 
 
 def _align_request(
@@ -202,23 +204,59 @@ def _parse(data: Any, slices: list[Slice]) -> list[list[Word]]:
         raise AlignerUnavailable(f"回應筆內欄位不合契約：{exc!r}") from exc
 
 
-def _log_dropped_batches(failures: list[_BatchFailure], *, total: int) -> None:
-    """記下被丟棄的批次。
+def _partition_sendable(
+    segments: list[Segment], slices: list[Slice]
+) -> tuple[list[_Sendable], dict[int, Omission]]:
+    """分成送得出去的段落與送不出去的（後者附理由，見 `_why_not_sent`）。"""
+    sendable: list[_Sendable] = []
+    omissions: dict[int, Omission] = {}
+    for index, (segment, sliced) in enumerate(zip(segments, slices)):
+        if (why := _why_not_sent(segment, sliced)) is not None:
+            omissions[index] = why
+        else:
+            sendable.append(_Sendable(index, segment, sliced))
+    return sendable, omissions
 
-    部分失敗不 raise，故端點層不會記任何東西；不在此記的話，那些段落會悄悄變成未對齊，
-    而 `merge_alignment` 只會說「字級清單為空」，看不出有一批整批失敗（#37）。
 
-    全批失敗時呼叫端只傳入第一批以外的失敗：往上傳的那個由端點層記錄，避免同一件事
-    出現兩條訊息，而其餘批次的原因仍須留下（跨批不保證同因）。
+def _batch_failed(order: int, total: int, exc: Exception, *, budget: float) -> Omission:
+    """一批送出後失敗的原因。
+
+    批號讓同批的段落在下游被認出是同一件事而合記一條。逾時另外描述：`asyncio.timeout`
+    拋的 `TimeoutError` 本身沒有訊息，而預算是所有批次共用的，故要說出是在哪一批耗盡。
     """
-    for failure in failures:
-        logger.warning(
-            "第 %d／%d 批（%d 段）對齊失敗，該批段落降級為未對齊：%s",
-            failure.order,
-            total,
-            failure.segment_count,
-            failure.error,
+    cause = (
+        f"逾時（對齊的 {budget} 秒預算內未回應）"
+        if isinstance(exc, TimeoutError)  # AlignerTimeout 不繼承它，兩者不會混淆
+        else str(exc)
+    )
+    return Omission("batch_failed", f"第 {order}／{total} 批對齊失敗：{cause}")
+
+
+def _budget_spent(order: int, total: int, *, budget: float) -> Omission:
+    """一批因預算用盡而未送出的原因。"""
+    return Omission(
+        "budget_spent", f"第 {order}／{total} 批未送出：對齊的 {budget} 秒預算已用盡"
+    )
+
+
+def _to_alignments(
+    aligned: dict[int, list[Word]],
+    slices: list[Slice],
+    omissions: dict[int, Omission],
+) -> list[SegmentAlignment]:
+    """把逐批取得的字級結果攤回原段序。
+
+    未送出與失敗批次的段落得到空的 words 與一個原因，但仍帶自己的切片範圍：索引因此
+    始終與 segments 對齊，而落界判準對每一段都有可比對的範圍。
+    """
+    return [
+        SegmentAlignment(
+            words=aligned.get(index, []),
+            bounds=sliced.bounds,
+            omission=omissions.get(index),
         )
+        for index, sliced in enumerate(slices)
+    ]
 
 
 class HttpAlignerClient:
@@ -250,73 +288,88 @@ class HttpAlignerClient:
         except httpx.HTTPError:
             return False
 
-    async def align(self, audio: Path, segments: list[Segment]) -> list[list[Word]]:
-        sendable = self._prepare_sendable(audio, segments)
+    async def align(
+        self, audio: Path, segments: list[Segment]
+    ) -> list[SegmentAlignment]:
+        slices = self._slice_each(audio, segments)
+        sendable, omissions = _partition_sendable(segments, slices)
         if not sendable:
             # 也涵蓋 segments 為空（音訊有效但完全無語音，docs/api/asr.md §6）：
             # aligner 的 audio 為必填欄位，送零個檔只會換來 400。
-            return [[] for _ in segments]
+            return _to_alignments({}, slices, omissions)
 
         batches = list(batched(sendable, self._max_batch_items))
-        aligned, failures = await self._align_batches(batches)
-        if len(failures) == len(batches):
-            # 全批失敗即對齊完全不可得，須讓端點層知道以記錄服務層級的原因並降級。
-            # 靜默回全空會使 log 只剩逐段的「字級清單為空」，診斷只能靠反推（#37）。
-            #
-            # 只有一個例外能往上傳，故其餘批次的原因在此記下：跨批不保證同因（服務在
-            # 兩次請求之間被重啟時，可能一批逾時、另一批回 503），只 raise 第一個會讓
-            # 其他原因完全消失。
-            _log_dropped_batches(failures[1:], total=len(batches))
-            raise failures[0].error
-        _log_dropped_batches(failures, total=len(batches))
-        # 未送出與失敗批次的段落留空位，使結果的索引仍與 segments 對齊。
-        return [aligned.get(index, []) for index in range(len(segments))]
+        aligned, failed = await self._align_batches(batches)
+        # 全批失敗也不拋出：降級是本層的保證（見 AlignerClient.align）。批次原因逐段
+        # 帶出去，故跨批不同因時每個原因都留著——服務在兩次請求之間被重啟的話，可能
+        # 一批逾時、另一批回 503，只往上傳一個會讓其他原因完全消失。
+        return _to_alignments(aligned, slices, omissions | failed)
 
-    def _prepare_sendable(
-        self, audio: Path, segments: list[Segment]
-    ) -> list[_Sendable]:
-        """逐段切片並剔除送不出去的段落，理由見 `_is_alignable`。"""
-        sendable: list[_Sendable] = []
-        for index, segment in enumerate(segments):
-            sliced = slice_wav(
+    def _slice_each(self, audio: Path, segments: list[Segment]) -> list[Slice]:
+        """逐段切片。**每段都切**，包含送不出去的段落（理由見 `_why_not_sent`）：
+        它們的字級結果雖為空，切片範圍仍是回傳結果的一部分。"""
+        return [
+            slice_wav(
                 audio,
                 start=segment.Start - self._buffer,
                 end=segment.End + self._buffer,
             )
-            if _is_alignable(segment, sliced):
-                sendable.append(_Sendable(index, segment, sliced))
-        return sendable
+            for segment in segments
+        ]
 
     async def _align_batches(
         self, batches: list[tuple[_Sendable, ...]]
-    ) -> tuple[dict[int, list[Word]], list[_BatchFailure]]:
-        """逐批送出，回傳（段索引 → 字級結果）與失敗的批次。
+    ) -> tuple[dict[int, list[Word]], dict[int, Omission]]:
+        """逐批送出，回傳（段索引 → 字級結果）與（段索引 → 該批沒有結果的原因）。
 
-        一批失敗只記錄不中斷：批次級故障隔離，不丟棄其他批已取得的時間戳（#36）。
+        一批失敗只記下原因不中斷：批次級故障隔離，不丟棄其他批已取得的時間戳（#36）。
+
+        **逾時是所有批次共用的預算，不是每批各有一份。** 分批之後「批數 × 每批逾時」會
+        超過端點 guard 分給對齊的那一份（`config.heavy_request_budget` 只加一次），使
+        guard 先於內層觸發並回 504，逐字稿一併喪失——ADR-0004 的第二層降級要避免的正是
+        這件事。預算用盡後剩餘批次直接不送，已取得的結果留著。
+
+        預算以 `asyncio.timeout` 施加而非只把剩餘秒數交給 httpx：httpx 的 timeout 是
+        connect／read／write／pool 各自的上限，而 read 量的是「兩次讀取之間」而非整批
+        耗時，慢速滴流的回應能一路超出預算。整體上限只有在這一層才真正成立。
         """
         aligned: dict[int, list[Word]] = {}
-        failures: list[_BatchFailure] = []
+        omissions: dict[int, Omission] = {}
+        total = len(batches)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._timeout
         async with self._client() as client:
             for order, batch in enumerate(batches, start=1):
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    why = _budget_spent(order, total, budget=self._timeout)
+                    omissions.update((item.index, why) for item in batch)
+                    continue
                 slices = [item.sliced for item in batch]
                 try:
-                    payload = await self._post_align(
-                        client, [item.segment for item in batch], slices
-                    )
+                    async with asyncio.timeout(remaining):
+                        payload = await self._post_align(
+                            client, [item.segment for item in batch], slices
+                        )
                     parsed = _parse(payload, slices)
-                except (AlignerTimeout, AlignerUnavailable) as exc:
-                    failures.append(_BatchFailure(order, len(batch), exc))
+                except (AlignerUnavailable, AlignerTimeout, TimeoutError) as exc:
+                    why = _batch_failed(order, total, exc, budget=self._timeout)
+                    omissions.update((item.index, why) for item in batch)
                     continue
                 aligned.update(
                     (item.index, words) for item, words in zip(batch, parsed)
                 )
-        return aligned, failures
+        return aligned, omissions
 
     async def _post_align(
         self, client: httpx.AsyncClient, segments: list[Segment], slices: list[Slice]
     ) -> Any:
         """送一批並回傳其 JSON 主體；連線、狀態碼與主體格式的失敗一律轉為本模組的
-        例外，使端點層只需認識這兩種（ADR-0004 的第二層降級）。"""
+        兩種例外，由呼叫端轉成該批段落的 omission。
+
+        整批的時間上限由呼叫端以 `asyncio.timeout` 施加（見 `_align_batches`）。client
+        自身的逾時仍在，但只是同一份預算的下界，不是每批各有一份。
+        """
         data, files = _align_request(segments, slices)
         try:
             resp = await client.post("/align", data=data, files=files)
@@ -324,7 +377,9 @@ class HttpAlignerClient:
         except httpx.HTTPStatusError as exc:
             raise AlignerUnavailable(_describe_error_response(exc.response)) from exc
         except httpx.TimeoutException as exc:
-            raise AlignerTimeout(f"逾時 {self._timeout} 秒未回應") from exc
+            raise AlignerTimeout(
+                f"逾時（對齊的 {self._timeout} 秒預算內未回應）"
+            ) from exc
         except httpx.HTTPError as exc:
             # 連線層失敗（拒絕連線、DNS、TLS）沒有回應體可讀，型別本身即線索。
             raise AlignerUnavailable(f"{type(exc).__name__}：{exc}") from exc

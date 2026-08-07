@@ -13,12 +13,14 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from vibe_vox.adapters.aligner import (
-    AlignerTimeout,
-    AlignerUnavailable,
-    HttpAlignerClient,
+from vibe_vox.adapters.aligner import HttpAlignerClient
+from vibe_vox.adapters.base import (
+    Omission,
+    Segment,
+    SegmentAlignment,
+    TranscriptionResult,
+    Word,
 )
-from vibe_vox.adapters.base import Segment, TranscriptionResult, Word
 from vibe_vox.adapters.stub import StubAlignerClient, StubAsrClient
 from vibe_vox.adapters.vllm_asr import AsrTimeout, AsrUnavailable, VllmAsrClient
 from vibe_vox.audio.errors import (
@@ -72,17 +74,24 @@ class _RaisingIntake:
         yield  # pragma: no cover — 使函式成為 async generator
 
 
-class _RaisingAligner:
-    """對齊服務不可用的替身，驗證第二層降級。"""
+class _DegradingAligner:
+    """對齊服務不可用的替身，驗證第二層降級。
 
-    def __init__(self, exc: Exception) -> None:
-        self._exc = exc
+    回全段空結果配同一句原因，形狀與真 client 在服務掛掉時的回傳一致——降級由
+    `AlignerClient.align` 保證，故替身**不拋例外**，端點層也就沒有東西可攔。
+    """
+
+    def __init__(self, detail: str) -> None:
+        self._omission = Omission("batch_failed", detail)
 
     async def health(self) -> bool:
         return False
 
     async def align(self, audio, segments):
-        raise self._exc
+        return [
+            SegmentAlignment(words=[], bounds=(s.Start, s.End), omission=self._omission)
+            for s in segments
+        ]
 
 
 def _client(tmp_path, result, aligner_client=None):
@@ -134,10 +143,18 @@ def test_transcribe_returns_word_level_alignment(tmp_path):
         transcription_only="你好",
         duration=0.9,
     )
-    words = [
-        [Word(Text="你", Start=0.42, End=0.58), Word(Text="好", Start=0.58, End=0.90)]
+    aligned_words = [
+        SegmentAlignment(
+            words=[
+                Word(Text="你", Start=0.42, End=0.58),
+                Word(Text="好", Start=0.58, End=0.90),
+            ],
+            bounds=(0.0, 1.4),  # 段界 0.0–0.9 加 buffer，右側被 2.0 秒的音檔涵蓋
+        )
     ]
-    client = _client(tmp_path, result, aligner_client=StubAlignerClient(result=words))
+    client = _client(
+        tmp_path, result, aligner_client=StubAlignerClient(result=aligned_words)
+    )
 
     resp = client.post(
         "/api/asr/transcribe",
@@ -180,8 +197,8 @@ def test_transcribe_logs_the_service_reason_without_repeating_it_per_segment(
     tmp_path, caplog
 ):
     # #36 的實測 log 是一條服務層級的訊息後面跟著 63 條完全相同的「字級清單為空」，
-    # 真正的原因被推出畫面，診斷時要往上翻 63 行才看得到。端點層知道「服務整體失敗」
-    # 這個事實，須把它傳給 merge_alignment 以免逐段重複同一件事（#37）。
+    # 真正的原因被推出畫面，診斷時要往上翻 63 行才看得到。原因隨結果過 seam 後，同因的
+    # 段落合成一條，端點層不再需要知道「服務整體失敗」這個事實（#37）。
     result = TranscriptionResult(
         segments=[
             Segment(Start=0.0, End=1.0, Speaker="0", Content="你好"),
@@ -191,10 +208,14 @@ def test_transcribe_logs_the_service_reason_without_repeating_it_per_segment(
         transcription_only="你好再見",
         duration=2.0,
     )
-    unavailable = AlignerUnavailable(
-        "HTTP 400 BATCH_TOO_LARGE：單次 63 段超過上限 32 段，請分批送。"
+    client = _client(
+        tmp_path,
+        result,
+        aligner_client=_DegradingAligner(
+            "第 1／1 批對齊失敗：HTTP 400 BATCH_TOO_LARGE："
+            "單次 63 段超過上限 32 段，請分批送。"
+        ),
     )
-    client = _client(tmp_path, result, aligner_client=_RaisingAligner(unavailable))
 
     with caplog.at_level(logging.WARNING):
         resp = client.post(
@@ -207,8 +228,10 @@ def test_transcribe_logs_the_service_reason_without_repeating_it_per_segment(
     assert "字級清單為空" not in caplog.text
 
 
-@pytest.mark.parametrize("exc", [AlignerUnavailable(), AlignerTimeout()])
-def test_transcribe_still_returns_transcript_when_aligner_fails(tmp_path, exc):
+@pytest.mark.parametrize(
+    "reason", ["HTTP 503 ALIGNER_NOT_READY：尚未就緒。", "逾時 60 秒未回應"]
+)
+def test_transcribe_still_returns_transcript_when_aligner_fails(tmp_path, reason):
     # 第二層降級（ADR-0004）：逐字稿有獨立價值，不因評分這項附加功能失效而一併
     # 不可得。故對齊服務掛掉或逾時**不得**映射成 502／504。
     result = TranscriptionResult(
@@ -217,7 +240,7 @@ def test_transcribe_still_returns_transcript_when_aligner_fails(tmp_path, exc):
         transcription_only="你好",
         duration=1.2,
     )
-    client = _client(tmp_path, result, aligner_client=_RaisingAligner(exc))
+    client = _client(tmp_path, result, aligner_client=_DegradingAligner(reason))
 
     resp = client.post(
         "/api/asr/transcribe",

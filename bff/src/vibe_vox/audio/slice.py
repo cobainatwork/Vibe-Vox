@@ -5,6 +5,7 @@
 且每段一個子進程會付上逾時處理與檔案落地的代價。全程於記憶體完成，不落暫存檔。
 """
 
+import math
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,10 +15,12 @@ from vibe_vox.audio.wav import PcmAudio, PcmSpec, wrap_pcm
 
 @dataclass(frozen=True)
 class Slice:
-    """切出的 wav、其在原音檔的起始秒數，以及實際取得的 frame 數。
+    """切出的 wav、其在原音檔涵蓋的時間範圍，以及實際取得的 frame 數。
 
-    start 是**夾限後的實際切片起點**，即該切片時間軸的 0 對應原音檔的哪一刻。
-    呼叫端據此把對齊結果換算回絕對時間，不需自行重算夾限。
+    start 與 end 是**夾限後的實際範圍**：start 即該切片時間軸的 0 對應原音檔的哪一
+    刻，end 為它涵蓋到哪一刻。呼叫端據此把對齊結果換算回絕對時間、並判斷字是否落在
+    該段音訊之外，不需自行重算夾限——重算要複製夾限規則與 buffer 設定值，且兩者都取
+    frame 格點（見 `slice_wav`），未量化的重算值會與換算後的時間戳落在格點兩側。
 
     frames 為 0 表示請求的區間完全落在音檔外。此時 wav 仍是合法的 wav（只有
     header），故長度判斷須看 frames 而非 len(wav)。
@@ -25,7 +28,22 @@ class Slice:
 
     wav: bytes
     start: float
+    end: float
     frames: int
+
+    @property
+    def bounds(self) -> tuple[float, float]:
+        """涵蓋的時間範圍，**兩端各向外取到毫秒格點**。
+
+        對齊結果的時間戳取三位小數（與 qwen-asr 的輸出精度一致），而 start／end 落在
+        frame 格點上，兩者的格點不同：`240001/24000 = 10.0000417` 這種端點會讓恰好對到
+        切片邊界的字在四捨五入後跑到範圍外，使正常段落被落界判準攔下。向外取整讓範圍
+        涵蓋所有能捨入到它的時間戳，代價是最多寬 1 毫秒——遠小於任何有意義的偏移。
+
+        這是 `_DURATION_TOLERANCE_SECONDS` 那條教訓的同一個形狀：閾值不能與被量化的
+        資料落在同一格點上，否則比較結果由捨入決定而非由語義決定。
+        """
+        return (math.floor(self.start * 1000) / 1000, math.ceil(self.end * 1000) / 1000)
 
 
 def wav_duration(src: Path) -> float:
@@ -51,6 +69,7 @@ def slice_wav(src: Path, *, start: float, end: float) -> Slice:
         reader.setpos(first_frame)
         frames = reader.readframes(int(end * rate) - first_frame)
 
+    frame_count = len(frames) // (params.nchannels * params.sampwidth)
     return Slice(
         wav=wrap_pcm(
             PcmAudio(
@@ -63,5 +82,8 @@ def slice_wav(src: Path, *, start: float, end: float) -> Slice:
             )
         ),
         start=first_frame / rate,
-        frames=len(frames) // (params.nchannels * params.sampwidth),
+        # 自實際讀到的 frame 數導出而非由請求的 end 夾限：readframes 讀到檔尾就停，
+        # 兩者在末段會不同，而落界判準要的是真正有音訊的範圍。
+        end=(first_frame + frame_count) / rate,
+        frames=frame_count,
     )
