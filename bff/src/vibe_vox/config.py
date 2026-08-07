@@ -60,7 +60,9 @@ class Settings:
     max_concurrent_heavy_requests: int = field(
         default_factory=_env("VIBE_VOX_MAX_CONCURRENT_HEAVY_REQUESTS", "8", int)
     )
-    # 音檔上傳單檔上限（bytes）；超過回 413 語意。25 MiB 對齊常見 ASR 上傳量級。
+    # 音檔上傳單檔上限（bytes）；超過回 413 語意。200 MiB 容納長會議錄音。
+    # **這個值同時被 Voice clone 的參考音上傳沿用**（api/admin_voices.py），而參考音
+    # 的合理上限是數 MiB——兩者解耦見 #44。
     audio_max_bytes: int = field(
         default_factory=_env("VIBE_VOX_AUDIO_MAX_BYTES", "209715200", int)
     )
