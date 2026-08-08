@@ -432,7 +432,11 @@ def test_taiwan_readings_are_locked_on_the_way_to_the_model(tmp_path):
 
 
 # 結構助詞與語氣詞。它們是中文最高頻的字，鎖錯一個比漏鎖任何實詞都刺耳。
-_PARTICLES = "的了著地得嗎呢吧啊呀喔哦噢嗯耶欸啦囉"
+#
+# **刻意不從 `tts_g2p` import。** 這份是本測試對 #50 D5 的契約陳述、是下限：實作那份若
+# 被放寬（拿掉某個字），這裡照樣檢查它而測試會紅；實作若新增字，那是收緊，這裡不必跟。
+# import 過來就沒有這個方向性——移除一個字會讓斷言連同它一起消失，靜默轉綠。
+_PARTICLES = "的了著地得嗎呢吧啊呀喔哦噢嗯耶欸啦囉唷哇咧嘛喲唄"
 
 
 def _customer_turns() -> list[str]:
@@ -490,20 +494,30 @@ def test_real_dialogue_turns_survive_the_whole_preprocessing_pipeline(tmp_path):
         stripped = re.sub(r"\{[^{}]*\}", "", text)
         assert not re.search(r"\d", stripped), f"有數字沒被展開：{stripped[:40]}…"
 
-    # **這條守的是 #50 換實作時真正會壞的那件事。** 新判準若沒排除功能字，`的` 會被鎖成
-    # `{di4}`——在這份逐字稿上實際發生過兩次（#50 D5）。`的` 是中文最高頻的字。
+    # **這條守的是 #50 換實作時真正會壞的那件事，而且是 `的` 唯一的防線。** 新判準若沒
+    # 排除功能字，`的` 會被鎖成 `{di4}`——在這份逐字稿上實際發生過（#50 D5）。
+    #
+    # **必須逐次計數，不能只問「還在不在」。** 一句話裡通常有好幾個 `的`，鎖掉其中一個
+    # 剩下的照樣讓存在性斷言成立：實測把 D5 拿掉，四處誤鎖裡只有 `喔喔喔`（3→1）會被
+    # 存在性抓到，`的` 那兩處（4→3、6→5）整個漏掉。
+    #
+    # 觸發它需要**整段** turn 的上下文：`你的意思是` 這五個字單獨跑不會誤鎖，從同一句
+    # 切出來的任何短片段也不會。自造樣本驗不出這件事，連真實文字的片段都驗不出。
+    #
+    # TN 不增刪助詞（實測 19 turn 全數守恆），故可以直接拿原始 turn 當基準。
     for turn, text in zip(turns, sent_texts, strict=True):
         for particle in _PARTICLES:
-            if particle in turn:
-                assert particle in text, (
-                    f"`{particle}` 在輸出裡消失，它被鎖了讀音：{text[:40]}…"
-                )
+            assert turn.count(particle) == text.count(particle), (
+                f"`{particle}` 少了 {turn.count(particle) - text.count(particle)} 個，"
+                f"它被鎖了讀音：{text[:40]}…"
+            )
 
 
 def test_the_reading_the_operator_reported_is_fixed_end_to_end(tmp_path):
     # 操作者 2026-08-08 聽到「倒垃圾」被唸成 dǎo。這條守的是那個回報本身：`倒` 的判準是
-    # 它後面接什麼詞，而主表會把 `垃圾` 換成標記——三趟的順序若倒了，判準就看不到字。
-    # 同一句還帶 TN，因為 `{dao4}` 的聲調數字若被 TN 展開成 `{dao四}` 標記就失效。
+    # 它後面接什麼詞，而主表要在同一串字裡把 `垃圾` 換成標記——兩者都讀原文才不會互相
+    # 遮蔽（#50 D6；舊版是三趟字串改寫，順序倒了判準就看不到字）。同一句還帶 TN，因為
+    # `{dao4}` 的聲調數字若被 TN 展開成 `{dao四}` 標記就失效。
     u = _sent_utterance(tmp_path, {"input": "倒垃圾的桶子有 3kg"})
 
     assert u.text == "{dao4}{le4}{se4}的桶子有三公斤"
@@ -521,8 +535,9 @@ def test_a_realistic_sales_sentence_survives_both_preprocessing_layers(tmp_path)
     )
 
     assert u.text == (
-        "定{qi2}壽險可以分{qi2}繳，繳費{qi2}限{han4}{pin3}{zhi2}都請您放心，"
-        "體檢的血{yi4}項目如果過{qi2}，我們會在十月二十日前重新安排。"
+        # `和` 自 #50 起交還給標準讀音 hé（見 test_tts_g2p 的 he_is_left_to_the_model）。
+        "定{qi2}壽險可以分{qi2}繳，繳費{qi2}限和{pin3}{zhi2}都請您放心，"
+        "體檢的血{yi4}項目如果過{qi2}，我們會在十月二十日前{chong2}新安排。"
     )
 
 
