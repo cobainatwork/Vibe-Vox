@@ -23,6 +23,7 @@ from vibe_vox.adapters.base import (
 )
 from vibe_vox.adapters.vllm_omni_tts import VllmOmniTtsClient
 from vibe_vox.audio.wav import PcmAudio
+from vibe_vox.tts_text import SpeechText
 
 need_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="需要 ffmpeg")
 
@@ -110,11 +111,39 @@ def test_reference_audio_mime_follows_the_actual_container(tmp_path):
 
 def test_instruct_becomes_inline_prefix_of_input(tmp_path):
     # 風格的唯一通道是 input 的行內 (...) 前綴，語法對齊官方 CLI 的 build_final_text。
+    #
+    # **前綴的文字與正文一起轉簡**（#51）：字形訊號是整個 input 欄位的屬性，而前綴就在
+    # 句首——留這半繁體等於把觸發源放在最敏感的位置。括號是 ASCII，轉換動不到語法本身，
+    # 故前綴結構原樣通過（這是 D5 那個優勢的載體，被動到不會有任何錯誤訊號）。
     payload = _captured_payload(
         tmp_path, [Utterance(text="您好", instruct="語速偏快、音量略大")]
     )
 
-    assert payload["input"] == "(語速偏快、音量略大)您好"
+    assert payload["input"] == "(语速偏快、音量略大)您好"
+
+
+def test_traditional_input_reaches_the_model_as_simplified(tmp_path):
+    # VoxCPM2 對特定繁體字會落到**粵語**發音，不是唸錯聲調——ASR 回讀出現粵語專用字
+    # （啲、嘢、嘅、喺、哋）。同一句同一音色，繁體 5/8 錯、簡體 1/8；「學習語言環境」
+    # 繁體 7/8 錯、簡體 0/8（#51）。字形是模型判斷語言的訊號。
+    payload = _captured_payload(
+        tmp_path, [Utterance(text="我和您約下週三討論學習語言環境")]
+    )
+
+    assert payload["input"] == "我和您约下周三讨论学习语言环境"
+
+
+def test_reading_markers_and_non_han_survive_the_simplification(tmp_path):
+    # 讀音標記 `{hang2}` 是 VoxCPM2 的語法、由前處理層注入（tts_g2p），轉換若動到它，
+    # 模型只會照字面把 hang2 唸出來——聽得出來，但沒有任何錯誤訊號。英數與標點同理。
+    #
+    # 期望值兩個方向都能變紅：漢字沒轉簡是一種紅，標記或英數被動到是另一種。
+    payload = _captured_payload(
+        tmp_path,
+        [Utterance(text=SpeechText("去銀{hang2}辦 LINE Pay，共 21,600 元"))],
+    )
+
+    assert payload["input"] == "去银{hang2}办 LINE Pay，共 21,600 元"
 
 
 def test_request_omits_silently_ignored_style_fields(tmp_path):

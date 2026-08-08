@@ -10,6 +10,7 @@ import re
 import wave
 from pathlib import Path
 
+import httpx
 from fastapi.testclient import TestClient
 
 from vibe_vox.adapters.base import CONTRACT_SPEC, TtsTimeout, TtsUnavailable
@@ -347,6 +348,27 @@ def test_speech_unknown_model_rejected(tmp_path):
     assert resp.json()["error"]["code"] == "UNSUPPORTED_MODEL"
 
 
+def _client_capturing_model_input(tmp_path) -> tuple[TestClient, list[str]]:
+    """回一個接**真** adapter 的 client，與它送給模型端點的 `input` 欄位（依序累積）。
+
+    與 `_sent_utterance` 的差別就是那個「真」字：t2s 在 `TtsClient` 之內（#51 D1），而
+    stub 看到的是它上游的 `Utterance`，量不到那一層。要驗最後送出去的字串只能到這裡。
+    """
+    sent: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content)["input"])
+        return httpx.Response(200, content=_wav_bytes(1.0))
+
+    client = _client_with(
+        tmp_path,
+        VllmOmniTtsClient(
+            "http://tts:8000", "voxcpm2", transport=httpx.MockTransport(handler)
+        ),
+    )
+    return client, sent
+
+
 def _sent_utterance(tmp_path, body: dict):
     """跑一次合成，取出實際交給 TtsClient 的那一句。"""
     stub = StubTtsClient()
@@ -357,12 +379,16 @@ def _sent_utterance(tmp_path, body: dict):
     return stub.last_utterances[0]
 
 
-def test_spoken_form_preview_equals_what_synthesis_sends(tmp_path):
-    """管理平面的預覽必須與合成實際送出的字串逐字相同。
+def test_spoken_form_preview_equals_what_preprocessing_hands_to_the_adapter(tmp_path):
+    """管理平面的預覽必須與前處理層交給 adapter 的字串逐字相同。
 
     這是預覽這個功能的全部價值：操作者聽到唸錯時要能分辨是前處理錯了還是模型錯了。兩者
     各走一條路的話，預覽會變成第二個真相——它說對的時候合成仍然可能是錯的，而那比沒有
     預覽更糟。
+
+    **守的是前處理層而不是 adapter 送出的字串**（#51 D1，本測試因此改名）。adapter 之下
+    還有一層 t2s，預覽刻意停在它之前：那一層是 VoxCPM2 的輸入格式要求，不是「台灣人會
+    怎麼唸」，而預覽要回答的是後者。代價寫在 `test_spoken_form_preview_stays_traditional`。
     """
     stub = StubTtsClient()
     client = _client_with(tmp_path, stub)
@@ -377,6 +403,31 @@ def test_spoken_form_preview_equals_what_synthesis_sends(tmp_path):
     ).status_code == 200
 
     assert preview.json()["data"]["spoken"] == stub.last_utterances[0].text
+
+
+def test_spoken_form_preview_stays_traditional(tmp_path):
+    """預覽停在繁體，模型拿到的是簡體。這是 #51 D1 刻意接受的代價，不是疏漏。
+
+    操作者要能讀懂那段文字（US 3），而預覽的用途是分辨「前處理錯了還是模型錯了」，不是
+    顯示傳輸層的編碼。
+
+    **沒有這條，把 t2s 往上搬到前處理層不會有任何紅燈**：預覽會靜默變成簡體，而上一條
+    測試（預覽等於前處理層的輸出）照樣全綠——它比的是兩邊，兩邊會一起變。
+    """
+    client, sent = _client_capturing_model_input(tmp_path)
+    voice = _create_voice(client)
+    # 操作者 2026-08-09 回報「週」被唸成「修」的那一句。TN 與讀音鎖定都不動它，故兩邊
+    # 的差異只剩字形，這條斷言因此量得到 t2s 本身。
+    text = "我和您約下週三"
+
+    preview = client.post("/api/admin/tts/spoken-form", json={"input": text})
+    assert preview.status_code == 200
+    assert client.post(
+        "/api/tts/speech", json={"input": text, "voice": voice["id"]}
+    ).status_code == 200
+
+    assert preview.json()["data"]["spoken"] == "我和您約下週三"
+    assert sent == ["我和您约下周三"]
 
 
 def test_spoken_form_preview_rejects_empty_input_like_synthesis_does(tmp_path):
@@ -511,6 +562,72 @@ def test_real_dialogue_turns_survive_the_whole_preprocessing_pipeline(tmp_path):
                 f"`{particle}` 少了 {turn.count(particle) - text.count(particle)} 個，"
                 f"它被鎖了讀音：{text[:40]}…"
             )
+
+
+def test_real_dialogue_turns_reach_the_model_simplified_with_markers_intact(tmp_path):
+    """同一批真實逐字稿再往下推一層：字形全轉簡，讀音標記逐一存活。
+
+    上一條守的是前處理層（stub 看到的是 `Utterance`，t2s 在它下游）。**這一條是 #51 D3
+    那項「落地前必須量」的固化**：t2s 是多對一（乾／幹→干、隻／只→只、髮／发→发），
+    合併後模型看到的是一個破音字。量測結果是 2,305 個漢字裡繁簡異形佔 33.4%、踩到有
+    歧義合併簇的 60 處，其中只有 `績` 的詞組讀音對不上原繁體讀音（已鎖進 `tts_g2p` 的
+    char 表），其餘全部對得上。
+
+    自造樣本量不到這件事：`{hang2}` 在一個十字句裡活著，不代表它在 19 段真實文字的每個
+    位置都活著，而破壞是靜默的——模型只會照字面把 hang2 唸出來。
+    """
+    turns = _customer_turns()
+    assert len(turns) > 10, "fixture 讀不到內容，下面的斷言全部會空轉"
+
+    client, sent = _client_capturing_model_input(tmp_path)
+    voice = _create_voice(client)
+    for turn in turns:
+        resp = client.post("/api/tts/speech", json={"voice": voice["id"], "input": turn})
+        assert resp.status_code == 200, f"{turn[:20]}… 回了 {resp.status_code}"
+
+    # 同一個 app、同一個音色、同一批文字，只換掉 adapter：唯一的變因就是 t2s，故兩邊的
+    # 差異只可能來自它。重算一次前處理當基準的話，那份重算會與端點的實際順序各自漂移。
+    stub = StubTtsClient()
+    client.app.state.tts_client = stub
+    before: list[list[str]] = []
+    for turn in turns:
+        resp = client.post("/api/tts/speech", json={"voice": voice["id"], "input": turn})
+        assert resp.status_code == 200
+        before.append(re.findall(r"\{[^{}]*\}", stub.last_utterances[0].text))
+
+    assert sum(len(m) for m in before) > 10, "前處理注入的標記太少，存活那條斷言會空轉"
+    for expected, text in zip(before, sent, strict=True):
+        assert re.findall(r"\{[^{}]*\}", text) == expected, (
+            f"讀音標記被轉換動到了：{text[:40]}…"
+        )
+
+    # **期望值不從 `to_simplified` 推導**，否則這條只是在斷言實作等於自己。這六個字是
+    # 逐字稿裡實際出現的高頻繁簡異形字（#51 D3 量測），簡體字形分別是 说么没听个别。
+    traditional_only = "說麼沒聽個別"
+    assert any(ch in turn for turn in turns for ch in traditional_only), (
+        "fixture 裡沒有這些字，下面的斷言會空轉"
+    )
+    for text in sent:
+        for ch in traditional_only:
+            assert ch not in text, f"`{ch}` 沒轉成簡體，那個字形會把模型帶去粵語：{text[:40]}…"
+
+
+def test_a_reading_locked_upstream_is_immune_to_the_simplification(tmp_path):
+    # #51 D3 指定的處理方式：繁簡合併製造的破音字靠前處理層鎖成標記，不是放棄 t2s。台灣
+    # 「業績」唸 yè jī，而 t2s 之後模型拿到的是 `绩`——那個字形在大陸一律 jì。鎖了就是
+    # 一串 ASCII，轉換動不到它。
+    #
+    # **這條守的正是那個推論本身**：`績` 若哪天從 char 表被拿掉，前處理層那邊只是少一個
+    # 標記（不會紅），而這裡會直接看到 `绩` 裸露在送出的字串裡。
+    client, sent = _client_capturing_model_input(tmp_path)
+    voice = _create_voice(client)
+
+    resp = client.post(
+        "/api/tts/speech", json={"voice": voice["id"], "input": "今年要完成業績"}
+    )
+
+    assert resp.status_code == 200
+    assert sent == ["今年要完成业{ji1}"]
 
 
 def test_the_reading_the_operator_reported_is_fixed_end_to_end(tmp_path):

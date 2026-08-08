@@ -9,6 +9,8 @@ docs/superpowers/specs/2026-08-05-voxcpm2-serving-transport.md），三項與直
   200 加一段沒套用該風格的音訊。風格的唯一通道是 input 的行內 (...) 前綴。
 - **voice 恆為 "default"。** VoxCPM2 沒有內建語者，該欄位是 OpenAI schema 的必填項
   但模型語意上忽略它；音色身分完全由 ref_audio 決定。
+- **input 一律轉簡體。** 特定繁體字會讓模型落到**粵語**發音，字形是它判斷語言的訊號
+  （#51）。這是本模型的輸入格式要求而非產品語義，故與模型同層：換一個引擎就不需要。
 """
 
 import asyncio
@@ -23,6 +25,7 @@ from vibe_vox.adapters.base import (
     TtsUnavailable,
     Utterance,
 )
+from vibe_vox.adapters.zh import to_simplified
 from vibe_vox.audio.errors import TranscodeError, TranscodeTimeout
 from vibe_vox.audio.sniff import HEADER_BYTES, detect_audio_format
 from vibe_vox.audio.transcode import resample_wav_to_pcm
@@ -58,15 +61,18 @@ def _concat_pcm(parts: list[PcmAudio]) -> PcmAudio:
     )
 
 
-def _styled_text(u: Utterance) -> str:
-    """把發聲方式組成行內前綴，語法對齊官方 CLI 的 build_final_text。
+def _model_input(u: Utterance) -> str:
+    """組出 input 欄位：行內風格前綴加正文，字形轉簡。
 
-    直接拼接是安全的：控制語法的中性化由 Utterance 自己保證（見 adapters/base.py），
-    不是靠某個呼叫端記得先做。
+    前綴語法對齊官方 CLI 的 build_final_text。直接拼接是安全的：控制語法的中性化由
+    Utterance 自己保證（見 adapters/base.py），不是靠某個呼叫端記得先做。
+
+    **轉簡在拼接之後，涵蓋整串。** 字形是模型判斷語言的訊號，而它讀的是整個 input
+    欄位——留 instruct 那半繁體等於保留觸發源。轉換動不到語法載體：括號與讀音標記的
+    `{le4}` 都是 ASCII，OpenCC 只換漢字（#51 D2、D5，19 turn 實測 0 破壞）。
     """
-    if not u.instruct:
-        return u.text
-    return f"({u.instruct}){u.text}"
+    styled = f"({u.instruct}){u.text}" if u.instruct else u.text
+    return to_simplified(styled)
 
 
 def _data_url(path: Path) -> str:
@@ -131,7 +137,7 @@ class VllmOmniTtsClient:
                 for u in utterances:
                     payload = {
                         "model": self._model,
-                        "input": _styled_text(u),
+                        "input": _model_input(u),
                         "voice": _VOICE_PLACEHOLDER,
                         "response_format": "wav",
                         "ref_audio": ref_audio,

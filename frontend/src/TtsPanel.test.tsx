@@ -39,7 +39,7 @@ async function fillAndSubmit(text = "您好，我想了解一下這張保單。"
 }
 
 describe("TtsPanel", () => {
-  it("合成後顯示實際送進模型的文字", async () => {
+  it("合成後顯示前處理層輸出的文字", async () => {
     // 唸錯不會回錯誤也不進 log。把前處理後的字串攤出來，操作者才分得出是前處理錯了還是
     // 模型錯了。
     mockedApi.synthesizeSpeech.mockResolvedValue(new Blob([new Uint8Array([1])]));

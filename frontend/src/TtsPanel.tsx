@@ -128,7 +128,7 @@ export function TtsPanel({ health }: { health: Health | null }) {
               資訊，也不要在這裡放一則看起來像合成失敗的錯誤。 */}
           {spoken && (
             <p className="tts-spoken">
-              送進模型的文字：<span>{spoken}</span>
+              前處理後的文字：<span>{spoken}</span>
             </p>
           )}
           <div className="asr-actions">

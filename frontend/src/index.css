@@ -297,7 +297,7 @@ body {
   text-decoration: none;
 }
 
-/* 前處理後實際送進模型的文字。診斷資訊，不搶播放器的視覺重量。 */
+/* 前處理層輸出的文字。診斷資訊，不搶播放器的視覺重量。 */
 .tts-spoken {
   margin: 8px 0 0;
   color: var(--muted);

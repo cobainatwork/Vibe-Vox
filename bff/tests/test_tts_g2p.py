@@ -36,6 +36,8 @@ from vibe_vox.tts_g2p import lock_taiwan_readings
         ("記得攜帶身分證", "記得{xi1}帶身分證"),
         ("這是好消息", "這是好消{xi2}"),
         ("頭髮", "頭{fa3}"),
+        # #51 D3 的量測結果：t2s 之後模型拿到 `绩`，那個字形在大陸讀 jì。
+        ("完成業績", "完成業{ji1}"),
     ],
 )
 def test_words_and_chars_whose_taiwan_reading_differs_are_locked(raw, locked):
