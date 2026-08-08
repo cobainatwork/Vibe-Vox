@@ -192,6 +192,33 @@ def test_rules_survive_the_forms_people_actually_type(raw, spoken):
     assert to_spoken_form(raw) == spoken
 
 
+@pytest.mark.parametrize(
+    ("raw", "spoken"),
+    [
+        # **口語的拉長音不是範圍。** 真實逐字稿裡每四句就出現一次（見
+        # tests/fixtures/real_dialogues.json），而「你好～我是」被唸成「你好到我是」時
+        # 整句就毀了，且完全靜默。
+        ("哈囉你好～我是白蘿蔔", "哈囉你好～我是白蘿蔔"),
+        ("哈～不用這麼客氣啦", "哈～不用這麼客氣啦"),
+        ("欸欸～這麼嚴肅幹嘛啦", "欸欸～這麼嚴肅幹嘛啦"),
+        ("輕鬆一點喔～再見啦", "輕鬆一點喔～再見啦"),
+        ("好啦～三點見", "好啦～三點見"),
+        # 這條規則的本意：時刻與日期規則已經把範圍兩端換成中文，留下的波浪號要唸「到」。
+        ("會議 10:00~11:30", "會議十點整到十一點三十分"),
+        ("3:05~4:15", "三點零五分到四點十五分"),
+        ("2026/8/5～2026/9/1", "二零二六年八月五日到二零二六年九月一日"),
+        ("三～五天", "三到五天"),
+    ],
+)
+def test_a_drawn_out_tilde_in_speech_is_not_a_range(raw, spoken):
+    """判準是「左邊是數字或時間量詞」，不是「兩邊都是漢字」。
+
+    後者曾經成立過，因為這條規則只被時刻範圍的案例驗過——而口語的拉長音同樣夾在漢字
+    之間。真實逐字稿一進 repo 就抓到它（#50）。
+    """
+    assert to_spoken_form(raw) == spoken
+
+
 def test_a_realistic_sales_sentence_comes_out_whole():
     """一句真實的業務語句，一次跨十條規則。
 

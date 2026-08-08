@@ -5,7 +5,10 @@
 
 import asyncio
 import io
+import json
+import re
 import wave
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -426,6 +429,75 @@ def test_taiwan_readings_are_locked_on_the_way_to_the_model(tmp_path):
     u = _sent_utterance(tmp_path, {"input": "我們把垃圾分類做得很好"})
 
     assert u.text == "我們把{le4}{se4}分類做得很好"
+
+
+# 結構助詞與語氣詞。它們是中文最高頻的字，鎖錯一個比漏鎖任何實詞都刺耳。
+_PARTICLES = "的了著地得嗎呢吧啊呀喔哦噢嗯耶欸啦囉"
+
+
+def _customer_turns() -> list[str]:
+    """真實逐字稿裡客戶側的發話——那是 TTS 實際要合成的文字。
+
+    學員側是真人語音的 ASR 轉錄（含辨識錯誤），不會進合成路徑，故不取。
+    """
+    raw = json.loads(
+        (Path(__file__).parent / "data" / "real_dialogues.json").read_text("utf-8")
+    )
+    return [
+        turn["text"]
+        for dialogue in raw["dialogues"]
+        for turn in dialogue["turns"]
+        if turn["speaker"] == "customer"
+    ]
+
+
+def test_real_dialogue_turns_survive_the_whole_preprocessing_pipeline(tmp_path):
+    """真實逐字稿跑完整條前處理，三層都要留下可驗的痕跡。
+
+    自造樣本驗不出真實文字的邊界：英數混排（`加個 LINE`）、全形省略號、口語拉長音、
+    千分位金額（`21,600 元`）。fixture 的來歷見 data/real_dialogues.json 的 `_why`——
+    它進 repo 的第一輪就抓到 `～` 被唸成「到」（#50）。
+
+    **每一條斷言都要能單獨變紅**，否則整層失效時這個測試照樣全綠：標記格式那條在沒有
+    任何標記時恆真、`期` 那條在 TN 全廢時仍成立、TN 那條在鎖讀音全廢時仍成立。
+    """
+    turns = _customer_turns()
+    assert len(turns) > 10, "fixture 讀不到內容，下面的斷言全部會空轉"
+
+    stub = StubTtsClient()
+    client = _client_with(tmp_path, stub)
+    voice = _create_voice(client)
+
+    sent_texts = []
+    for turn in turns:
+        resp = client.post("/api/tts/speech", json={"voice": voice["id"], "input": turn})
+        assert resp.status_code == 200, f"{turn[:20]}… 回了 {resp.status_code}"
+        sent_texts.append(stub.last_utterances[0].text)
+
+    for text in sent_texts:
+        for marker in re.findall(r"\{[^{}]*\}", text):
+            assert re.fullmatch(r"\{[a-z]+[1-5]\}", marker), f"{marker} 不是合法讀音標記"
+
+    # 鎖讀音那層：`期` 在這三段對話裡出現很多次（分期、期間、逾期、當期），而**每一次都
+    # 必須被鎖**——同一個字在整份文件裡出現兩種讀音，比全部不鎖更刺耳（#46 Slice 2 審查
+    # 教訓 3）。斷言的是「全被鎖」而不是「鎖了幾個」，故不會讓清單的當前內容變成契約。
+    for text in sent_texts:
+        assert "期" not in text, f"有 `期` 沒被鎖，同一份文件會出現兩種讀音：{text[:40]}…"
+
+    # TN 那層：剝掉讀音標記後不該剩阿拉伯數字（標記裡的聲調數字不算）。這三段對話有四句
+    # 帶數字（`1500元`、`21,600 元`），TN 失效時它們會原樣留下讓模型逐字唸。
+    for text in sent_texts:
+        stripped = re.sub(r"\{[^{}]*\}", "", text)
+        assert not re.search(r"\d", stripped), f"有數字沒被展開：{stripped[:40]}…"
+
+    # **這條守的是 #50 換實作時真正會壞的那件事。** 新判準若沒排除功能字，`的` 會被鎖成
+    # `{di4}`——在這份逐字稿上實際發生過兩次（#50 D5）。`的` 是中文最高頻的字。
+    for turn, text in zip(turns, sent_texts, strict=True):
+        for particle in _PARTICLES:
+            if particle in turn:
+                assert particle in text, (
+                    f"`{particle}` 在輸出裡消失，它被鎖了讀音：{text[:40]}…"
+                )
 
 
 def test_the_reading_the_operator_reported_is_fixed_end_to_end(tmp_path):

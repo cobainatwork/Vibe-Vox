@@ -315,7 +315,15 @@ _SPACE_BETWEEN_HAN = re.compile(r"(?<=[一-鿿])[ \t]+(?=[一-鿿])")
 
 # 落單的波浪號。範圍規則跑之前，時刻規則可能已經把兩端換成中文（`10:00~11:30`），使範圍
 # 比對不到而留下一個不發音的符號。這是收尾，不是範圍規則的替代。
-_TILDE_BETWEEN_HAN = re.compile(rf"(?<=[一-鿿]){_TILDE}(?=[一-鿿])")
+#
+# **判準是「左邊是數字或時間量詞」，不是「兩邊都是漢字」。** 後者曾經成立過，因為這條只被
+# 時刻範圍的案例驗過——而口語的拉長音同樣夾在漢字之間，於是「你好～我是」被唸成「你好到
+# 我是」，整句就毀了。真實逐字稿裡每四句就出現一次（tests/fixtures/real_dialogues.json）。
+#
+# 左邊收 `整分秒日號月年時` 是因為時刻與日期規則的產物以量詞結尾（`十點整`、`三點零五分`、
+# `二零二六年八月五日`），右邊只需要數字——範圍的另一端一定是數字開頭。
+_TILDE_LEFT = _NUMERALS + "整分秒日號月年時"
+_TILDE_BETWEEN_NUMBERS = re.compile(rf"(?<=[{_TILDE_LEFT}]){_TILDE}(?=[{_NUMERALS}])")
 
 # 規則與其順序。**順序有實質後果**，故它是一份看得到的清單而不是散在函式裡的呼叫：
 #
@@ -349,7 +357,7 @@ _RULES: tuple[tuple[re.Pattern[str], _Replacement], ...] = (
     # 兩的兩條在數字朗讀之後：它們判斷的是中文數字的前後文，而那要等數字唸出來才存在。
     (_TWO_BEFORE_GROUP, "兩"),
     (_TWO_BEFORE_MEASURE, "兩"),
-    (_TILDE_BETWEEN_HAN, "到"),
+    (_TILDE_BETWEEN_NUMBERS, "到"),
     # 收空白必須最後：前面每一條都可能製造出夾在漢字之間的空白。
     (_SPACE_BETWEEN_HAN, ""),
 )
